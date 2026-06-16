@@ -1,0 +1,18 @@
+# Конфигурация сборки для Railway (Nixpacks).
+#
+# PHP-провайдер Nixpacks сам поднимает nginx + php-fpm и задаёт стартовую команду —
+# мы её НЕ переопределяем (иначе деплой сломается). Здесь только дополняем фазу
+# сборки: кэшируем конфиг/роуты/вьюхи и прогоняем миграции.
+#
+# ВАЖНО: в переменных окружения сервиса на Railway задать
+#   NIXPACKS_PHP_ROOT_DIR = /app/public
+# чтобы веб-корнем стал public/ (точка входа Laravel).
+
+[phases.build]
+cmds = [
+  "composer install --no-dev --optimize-autoloader --no-interaction",
+  "php artisan config:cache",
+  "php artisan route:cache",
+  "php artisan view:cache",
+  "php artisan migrate --force",
+]

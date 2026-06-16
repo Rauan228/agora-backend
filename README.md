@@ -77,15 +77,38 @@ many-to-many через `city_supplier`. Один поставщик отгру�
 CORS управляется переменной `FRONTEND_URL` в `.env` (origin фронта; превью-деплои
 Vercel `agora-*.vercel.app` разрешены автоматически).
 
-## Деплой на Railway
+## Деплой на Railway (Nixpacks)
 
-1. Создать проект на Railway, добавить **PostgreSQL** и сервис из этого репозитория.
-2. Переменные окружения сервиса (Variables):
-   - `APP_KEY` (`php artisan key:generate --show`)
-   - `APP_ENV=production`, `APP_DEBUG=false`
-   - `DB_CONNECTION=pgsql` и данные Postgres (Railway подставляет их через `${{Postgres.*}}`)
-   - `FRONTEND_URL=https://agora-trade.vercel.app`
-3. Команда запуска — см. `Procfile`.
+Railway деплоит из GitHub-репозитория. Сборка — через Nixpacks (без Docker):
+PHP-провайдер сам поднимает **nginx + php-fpm**. Сборка и миграции описаны
+в `nixpacks.toml`.
 
-pgAdmin подключается к Railway Postgres по публичным host/port/database/user/password
-из вкладки **Variables** сервиса Postgres.
+1. Запушить этот репозиторий на GitHub.
+2. На [railway.app](https://railway.app): New Project → Deploy from GitHub repo → выбрать репо.
+3. В проект добавить **PostgreSQL** (New → Database → PostgreSQL).
+4. В сервисе приложения → **Variables** задать:
+   ```
+   APP_KEY=base64:...            # php artisan key:generate --show
+   APP_ENV=production
+   APP_DEBUG=false
+   NIXPACKS_PHP_ROOT_DIR=/app/public   # веб-корень = public/
+
+   DB_CONNECTION=pgsql
+   DB_HOST=${{Postgres.PGHOST}}
+   DB_PORT=${{Postgres.PGPORT}}
+   DB_DATABASE=${{Postgres.PGDATABASE}}
+   DB_USERNAME=${{Postgres.PGUSER}}
+   DB_PASSWORD=${{Postgres.PGPASSWORD}}
+
+   FRONTEND_URL=https://agora-trade.vercel.app
+   ```
+   `${{Postgres.*}}` — ссылки на переменные сервиса Postgres (Railway подставит сам).
+5. Сгенерировать домен: Settings → Networking → Generate Domain.
+
+Миграции прогоняются автоматически на каждой сборке (`php artisan migrate --force`
+в `nixpacks.toml`).
+
+### pgAdmin → Railway Postgres
+В сервисе Postgres → **Variables** включить публичный доступ (Public Networking),
+взять `PGHOST/PGPORT/PGDATABASE/PGUSER/PGPASSWORD` и завести их как новое
+подключение в pgAdmin (SSL mode: require).
