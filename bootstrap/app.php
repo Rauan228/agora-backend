@@ -13,6 +13,14 @@ return Application::configure(basePath: dirname(__DIR__))
         health: '/up',
     )
     ->withMiddleware(function (Middleware $middleware): void {
+        // Доверяем прокси Railway, чтобы Laravel видел HTTPS и генерировал
+        // ссылки/формы с https:// (иначе браузер ругается «соединение не защищено»).
+        $middleware->trustProxies(at: '*', headers: Request::HEADER_X_FORWARDED_FOR
+            | Request::HEADER_X_FORWARDED_HOST
+            | Request::HEADER_X_FORWARDED_PORT
+            | Request::HEADER_X_FORWARDED_PROTO
+            | Request::HEADER_X_FORWARDED_AWS_ELB);
+
         // Неавторизованных гостей отправляем на страницу входа в админку
         $middleware->redirectGuestsTo(fn () => route('admin.login'));
     })

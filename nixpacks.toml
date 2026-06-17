@@ -1,8 +1,11 @@
 # Конфигурация сборки для Railway (Nixpacks).
 #
-# PHP-провайдер Nixpacks сам поднимает nginx + php-fpm и задаёт стартовую команду —
-# мы её НЕ переопределяем (иначе деплой сломается). Здесь только дополняем фазу
-# сборки: кэшируем конфиг/роуты/вьюхи и прогоняем миграции.
+# PHP-провайдер Nixpacks сам поднимает nginx + php-fpm и задаёт стартовую команду.
+# Здесь — только сборка: установка зависимостей и кэширование.
+#
+# Миграции и сид админа вынесены в preDeployCommand (railway.json),
+# т.к. в build-фазе БД недоступна — приватная сеть Railway работает
+# только в рантайме.
 #
 # ВАЖНО: в переменных окружения сервиса на Railway задать
 #   NIXPACKS_PHP_ROOT_DIR = /app/public
@@ -11,13 +14,6 @@
 [phases.build]
 cmds = [
   "composer install --no-dev --optimize-autoloader --no-interaction",
-  # Миграции и сид админа — ДО config:cache, чтобы env() (ADMIN_EMAIL/PASSWORD)
-  # читался напрямую (после кэша env() вне config-файлов вернёт null).
-  "php artisan migrate --force",
-  # Создаёт админа из ADMIN_EMAIL/ADMIN_PASSWORD (Variables на Railway).
-  # Идемпотентно — можно оставить, тестовых поставщиков НЕ заливает.
-  "php artisan db:seed --class=AdminSeeder --force",
-  # Кэши — в конце.
   "php artisan config:cache",
   "php artisan route:cache",
   "php artisan view:cache",
