@@ -1,6 +1,6 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
   "deploy": {
-    "preDeployCommand": ["php artisan migrate --force && php artisan db:seed --class=AdminSeeder --force"]
+    "preDeployCommand": ["php artisan migrate --force && php artisan db:seed --class=AdminSeeder --force && php artisan storage:link --force"]
   }
 }

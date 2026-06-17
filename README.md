@@ -91,7 +91,11 @@ PHP-провайдер сам поднимает **nginx + php-fpm**. Сборк
    APP_KEY=base64:...            # php artisan key:generate --show
    APP_ENV=production
    APP_DEBUG=false
+   APP_URL=https://<твой-домен>.up.railway.app   # ВАЖНО: для корректных URL логотипов
    NIXPACKS_PHP_ROOT_DIR=/app/public   # веб-корень = public/
+
+   ADMIN_EMAIL=admin@agora.com         # из них AdminSeeder создаёт админа
+   ADMIN_PASSWORD=...
 
    DB_CONNECTION=pgsql
    DB_HOST=${{Postgres.PGHOST}}
@@ -104,9 +108,20 @@ PHP-провайдер сам поднимает **nginx + php-fpm**. Сборк
    ```
    `${{Postgres.*}}` — ссылки на переменные сервиса Postgres (Railway подставит сам).
 5. Сгенерировать домен: Settings → Networking → Generate Domain.
+   Скопировать его в `APP_URL`.
 
-Миграции прогоняются автоматически на каждой сборке (`php artisan migrate --force`
-в `nixpacks.toml`).
+### Хранение логотипов (Railway Volume)
+
+Файловая система контейнера эфемерна — загруженные логотипы пропали бы при каждом
+деплое. Поэтому подключаем **постоянный диск (Volume)**:
+
+1. В сервисе приложения → **Settings → Volumes → New Volume**.
+2. Mount path: **`/app/storage/app/public`** (туда пишутся логотипы).
+3. Готово. Симлинк `public/storage` создаётся автоматически в `preDeployCommand`
+   (`php artisan storage:link --force`), URL логотипов берётся из `APP_URL`.
+
+Миграции, сид админа и `storage:link` выполняются в `preDeployCommand` (`railway.json`)
+при каждом деплое — в рантайме, когда БД и Volume уже доступны.
 
 ### pgAdmin → Railway Postgres
 В сервисе Postgres → **Variables** включить публичный доступ (Public Networking),
