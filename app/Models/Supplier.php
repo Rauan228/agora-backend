@@ -18,6 +18,7 @@ class Supplier extends Model
         'phone',
         'email',
         'website',
+        'telegram',
         'is_active',
     ];
 

@@ -27,7 +27,7 @@
         <label class="flex items-center gap-2 text-sm">
             <input type="checkbox" name="remember" value="1"> Запомнить меня
         </label>
-        <button class="w-full bg-gray-900 text-white rounded py-2 hover:bg-gray-700">Войти</button>
+        <button class="w-full bg-gray-900 text-white rounded-lg py-2 hover:bg-gray-700 active:scale-95 transition-all duration-150">Войти</button>
     </form>
 </div>
 @endsection

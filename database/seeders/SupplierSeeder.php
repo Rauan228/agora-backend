@@ -24,6 +24,7 @@ class SupplierSeeder extends Seeder
                 'phone'           => '+7 495 100-10-10',
                 'email'           => 'sales@palletprom.ru',
                 'website'         => 'https://palletprom.ru',
+                'telegram'        => '@palletprom',
                 'cities'          => ['Москва'],
             ],
             [

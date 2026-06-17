@@ -24,6 +24,7 @@ class StoreSupplierRequest extends FormRequest
             'phone'           => ['nullable', 'string', 'max:50'],
             'email'           => ['nullable', 'email', 'max:255'],
             'website'         => ['nullable', 'url', 'max:255'],
+            'telegram'        => ['nullable', 'string', 'max:255'],
             'is_active'       => ['boolean'],
             'logo'            => ['nullable', 'image', 'mimes:png,jpg,jpeg,svg,webp', 'max:2048'], // до 2 МБ
             'cities'          => ['array'],

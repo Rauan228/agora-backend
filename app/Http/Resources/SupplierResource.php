@@ -23,8 +23,9 @@ class SupplierResource extends JsonResource
             'contact' => [
                 'person'  => $this->contact_person,
                 'phone'   => $this->phone,
-                'email'   => $this->email,
-                'website' => $this->website,
+                'email'    => $this->email,
+                'website'  => $this->website,
+                'telegram' => $this->telegram,
             ],
             'shipping_cities' => $this->whenLoaded('cities', fn () => $this->cities->pluck('name')),
         ];

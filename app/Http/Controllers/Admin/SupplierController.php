@@ -16,19 +16,43 @@ class SupplierController extends Controller
     public function index(Request $request)
     {
         $search = trim((string) $request->query('q', ''));
+        $city   = trim((string) $request->query('city', ''));
+        $status = (string) $request->query('status', ''); // '', 'active', 'inactive'
 
         $suppliers = Supplier::query()
             ->with('cities')
+            // Текстовый поиск: название, ИНН, контакты
             ->when($search !== '', function ($query) use ($search) {
-                $query->where('commercial_name', 'like', "%{$search}%")
-                    ->orWhere('legal_name', 'like', "%{$search}%")
-                    ->orWhere('inn', 'like', "%{$search}%");
+                $query->where(function ($sub) use ($search) {
+                    $sub->where('commercial_name', 'like', "%{$search}%")
+                        ->orWhere('legal_name', 'like', "%{$search}%")
+                        ->orWhere('inn', 'like', "%{$search}%")
+                        ->orWhere('phone', 'like', "%{$search}%")
+                        ->orWhere('email', 'like', "%{$search}%");
+                });
             })
+            // Фильтр по городу отгрузки
+            ->when($city !== '', function ($query) use ($city) {
+                $query->whereHas('cities', fn ($sub) => $sub->where('name', $city));
+            })
+            // Фильтр по статусу
+            ->when($status === 'active', fn ($q) => $q->where('is_active', true))
+            ->when($status === 'inactive', fn ($q) => $q->where('is_active', false))
             ->latest()
             ->paginate(15)
             ->withQueryString();
 
-        return view('admin.suppliers.index', compact('suppliers', 'search'));
+        // Признак, что хоть один фильтр задан — для показа кнопки «Сбросить»
+        $hasFilters = $search !== '' || $city !== '' || $status !== '';
+
+        return view('admin.suppliers.index', [
+            'suppliers'  => $suppliers,
+            'search'     => $search,
+            'city'       => $city,
+            'status'     => $status,
+            'allCities'  => City::orderBy('name')->pluck('name'),
+            'hasFilters' => $hasFilters,
+        ]);
     }
 
     /** Форма создания. */
