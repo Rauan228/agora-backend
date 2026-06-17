@@ -35,7 +35,22 @@ class SupplierLogoTest extends TestCase
         // Файл реально лежит на диске public
         Storage::disk('public')->assertExists($supplier->logo_path);
 
-        // logo_url отдаёт корректную ссылку на /storage/...
-        $this->assertStringContainsString('/storage/'.$supplier->logo_path, $supplier->logo_url);
+        // logo_url отдаёт корректную ссылку на /files/...
+        $this->assertStringContainsString('/files/'.$supplier->logo_path, $supplier->logo_url);
+    }
+
+    /** Роут /files/{path} отдаёт реальный файл (без зависимости от симлинка). */
+    public function test_files_route_serves_file(): void
+    {
+        // Реальный диск (не fake): роут отдаёт файл через response()->file(),
+        // которому нужен настоящий путь на ФС.
+        Storage::disk('public')->put('logos/route_test.png', 'fake-image-bytes');
+
+        try {
+            $this->get('/files/logos/route_test.png')->assertOk();
+            $this->get('/files/logos/missing.png')->assertNotFound();
+        } finally {
+            Storage::disk('public')->delete('logos/route_test.png');
+        }
     }
 }

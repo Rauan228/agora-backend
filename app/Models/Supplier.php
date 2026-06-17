@@ -4,7 +4,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
-use Illuminate\Support\Facades\Storage;
 
 class Supplier extends Model
 {
@@ -35,6 +34,7 @@ class Supplier extends Model
     /** Полный URL логотипа (или null). Удобно для админки и API. */
     public function getLogoUrlAttribute(): ?string
     {
-        return $this->logo_path ? Storage::url($this->logo_path) : null;
+        // Отдаём через наш роут /files/{path} (не зависит от симлинка public/storage).
+        return $this->logo_path ? url('files/'.$this->logo_path) : null;
     }
 }
