@@ -5,6 +5,7 @@
 - **Фронт** (Next.js): https://agora-trade.vercel.app — [репозиторий](https://github.com/paulzverev/agora)
 - **Бэк** (этот репозиторий): Laravel 13 + PostgreSQL, деплой на Railway
 - **Админка**: голый Blade внутри этого же приложения (`/admin`)
+- **📘 Документация API для фронта:** [API.md](API.md)
 
 ## Стек
 

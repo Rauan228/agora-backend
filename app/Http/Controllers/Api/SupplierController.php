@@ -11,10 +11,17 @@ class SupplierController extends Controller
 {
     /**
      * Список активных поставщиков для фронта.
-     * Поддерживает поиск (?q=) и фильтр по городу (?city=).
+     * Параметры запроса:
+     *   q        — поиск по названию (коммерческому/юридическому)
+     *   city     — фильтр по городу отгрузки (точное совпадение названия)
+     *   per_page — размер страницы (1..100, по умолчанию 20)
+     *   page     — номер страницы (стандартная пагинация Laravel)
      */
     public function index(Request $request)
     {
+        $perPage = (int) $request->integer('per_page', 20);
+        $perPage = max(1, min($perPage, 100)); // защита от чрезмерных запросов
+
         $suppliers = Supplier::query()
             ->where('is_active', true)
             ->with('cities')
@@ -30,7 +37,7 @@ class SupplierController extends Controller
                 $query->whereHas('cities', fn ($sub) => $sub->where('name', $city));
             })
             ->orderBy('commercial_name')
-            ->paginate(20);
+            ->paginate($perPage);
 
         return SupplierResource::collection($suppliers);
     }
