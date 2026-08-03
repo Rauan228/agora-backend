@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Supplier extends Model
 {
@@ -29,6 +30,11 @@ class Supplier extends Model
     public function cities(): BelongsToMany
     {
         return $this->belongsToMany(City::class);
+    }
+
+    public function offers(): HasMany
+    {
+        return $this->hasMany(Offer::class);
     }
 
     /** Полный URL логотипа (или null). Удобно для админки и API. */

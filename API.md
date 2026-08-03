@@ -162,13 +162,60 @@ if (res3.ok) {
 
 ---
 
+### 3. Список офферов (SKU)
+
+```
+GET /api/offers
+```
+
+Только **опубликованные** (`is_active`). Параметры: `q`, `category` (slug),
+`category_id`, `supplier_id`, `stock_status`, `region`, `per_page`, `page`.
+
+### 4. Один оффер
+
+```
+GET /api/offers/{id}
+```
+
+---
+
+## Admin API (React SPA)
+
+Префикс `/api/admin/*`. Auth: **Bearer token** (Laravel Sanctum).
+
+| Метод | Путь | Описание |
+|---|---|---|
+| POST | `/api/admin/login` | `{ email, password }` → `{ token, user }` |
+| POST | `/api/admin/logout` | отозвать токен |
+| GET | `/api/admin/me` | текущий пользователь |
+| GET | `/api/admin/meta/categories` | категории + схема specs-полей |
+| GET | `/api/admin/meta/dictionaries` | enum-справочники |
+| GET/POST/… | `/api/admin/suppliers` | CRUD поставщиков |
+| GET/POST/… | `/api/admin/offers` | CRUD офферов |
+
+Пример логина:
+
+```js
+const res = await fetch(`${API}/admin/login`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+  body: JSON.stringify({ email: 'admin@agora.local', password: 'password' }),
+});
+const { token } = await res.json();
+// дальше: Authorization: Bearer ${token}
+```
+
+Мультипарт (логотип/фото): `POST /api/admin/suppliers` и
+`POST /api/admin/offers` (update тоже через POST — удобнее для FormData).
+
+Схема тех. полей оффера зависит от категории (`config/agora.php`,
+документы фаундера: общие поля + specs по категории).
+
+---
+
 ## Примечания
 
-- **CORS** настроен под фронт. Разрешён `https://agora-trade.vercel.app`
-  и превью-деплои Vercel `agora-*.vercel.app`. Список меняется переменной
-  `FRONTEND_URL` на бэкенде.
-- API отдаёт **только активных** поставщиков (`is_active = true`). Скрытые
-  в админке поставщики через API недоступны.
-- Данные администрируются через админку: `/admin`.
-- API пока read-only. Если фронту понадобятся write-операции — добавим
-  отдельно с авторизацией.
+- **CORS**: `FRONTEND_URL` + `ADMIN_FRONTEND_URL` (через запятую),
+  плюс превью `agora-*.vercel.app` / `agora-admin*.vercel.app` и localhost.
+- Публичное API отдаёт **только активных** поставщиков и офферов.
+- Админка: React SPA в `admin/` (Vercel). Legacy Blade `/admin` пока есть.

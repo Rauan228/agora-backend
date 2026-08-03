@@ -19,14 +19,24 @@ return [
 
     'allowed_methods' => ['*'],
 
-    // Разрешённые источники задаются через FRONTEND_URL (через запятую).
-    // По умолчанию '*' — удобно для разработки; на проде укажи домен Vercel.
-    'allowed_origins' => array_filter(
-        explode(',', (string) env('FRONTEND_URL', '*'))
-    ),
+    // FRONTEND_URL + ADMIN_FRONTEND_URL (через запятую в каждой).
+    // На проде: https://agora-trade.vercel.app,https://agora-admin.vercel.app
+    'allowed_origins' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', implode(',', array_filter([
+            env('FRONTEND_URL', '*'),
+            env('ADMIN_FRONTEND_URL', ''),
+        ])))
+    ))),
 
-    // Любой превью-деплой Vercel вида https://agora-*.vercel.app
-    'allowed_origins_patterns' => ['#^https://agora-[\w-]+\.vercel\.app$#'],
+    // Превью-деплои Vercel: продукт и админка
+    'allowed_origins_patterns' => [
+        '#^https://agora-[\w-]+\.vercel\.app$#',
+        '#^https://agora-admin[\w-]*\.vercel\.app$#',
+        '#^http://localhost(:\d+)?$#',
+        '#^http://127\.0\.0\.1(:\d+)?$#',
+    ],
+
 
     'allowed_headers' => ['*'],
 
