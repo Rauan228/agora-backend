@@ -4,20 +4,24 @@ use App\Http\Controllers\Api\Admin\AuthController as AdminAuthController;
 use App\Http\Controllers\Api\Admin\MetaController as AdminMetaController;
 use App\Http\Controllers\Api\Admin\OfferController as AdminOfferController;
 use App\Http\Controllers\Api\Admin\SupplierController as AdminSupplierController;
+use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\OfferController;
 use App\Http\Controllers\Api\SupplierController;
 use Illuminate\Support\Facades\Route;
 
 /*
 |--------------------------------------------------------------------------
-| Public API (витрина Next.js)
+| Public API (витрина Next.js — https://github.com/paulzverev/agora)
 |--------------------------------------------------------------------------
 */
+Route::get('/categories', [CategoryController::class, 'index']);
+
 Route::get('/suppliers', [SupplierController::class, 'index']);
 Route::get('/suppliers/{supplier}', [SupplierController::class, 'show']);
 
 Route::get('/offers', [OfferController::class, 'index']);
 Route::get('/offers/{offer}', [OfferController::class, 'show']);
+
 
 /*
 |--------------------------------------------------------------------------

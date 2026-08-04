@@ -1,221 +1,649 @@
-# Agora API — документация для фронтенда
+# Agora Public API — документация для фронтенда
 
-Публичное REST API бэкенда Agora. Отдаёт данные поставщиков для фронта
-(Next.js) вместо захардкоженных моков. Только чтение (GET), без авторизации.
+Документ для команды **product frontend**  
+репозиторий: [paulzverev/agora](https://github.com/paulzverev/agora) (Next.js / Vercel).
 
-**Базовый URL (прод):**
-```
-https://web-production-78053c.up.railway.app
-```
-
-Все ответы — в формате JSON (UTF-8). Кириллица в ответах приходит
-в экранированном виде (`М...`) — это нормально, любой JSON-парсер
-(`response.json()`, `JSON.parse`) разворачивает её автоматически.
+API **только чтение** (GET), **без авторизации**.  
+Админка (write) — отдельный SPA, в этом документе **не** описана.
 
 ---
 
-## Эндпоинты
+## Base URL
 
-### 1. Список поставщиков
+| Среда | URL |
+|---|---|
+| **Production** | `https://agora.178.88.115.213.sslip.io` |
+| API prefix | `/api` |
 
+Полный префикс запросов:
+
+```text
+https://agora.178.88.115.213.sslip.io/api
 ```
-GET /api/suppliers
+
+Health-check (не JSON, HTML «Application up»):
+
+```http
+GET https://agora.178.88.115.213.sslip.io/up
 ```
 
-Возвращает только **активных** поставщиков, отсортированных по названию,
-с пагинацией.
+---
 
-**Параметры запроса (все необязательные):**
+## Общие правила
 
-| Параметр   | Тип    | Описание                                                | Пример          |
-|------------|--------|---------------------------------------------------------|-----------------|
-| `q`        | string | Поиск по названию (коммерческому и юридическому)         | `?q=паллет`     |
-| `city`     | string | Фильтр по городу отгрузки (точное название)              | `?city=Москва`  |
-| `per_page` | int    | Размер страницы, 1–100 (по умолчанию 20)                | `?per_page=50`  |
-| `page`     | int    | Номер страницы                                          | `?page=2`       |
+| | |
+|---|---|
+| Формат | JSON, UTF-8 |
+| Auth | **нет** (публичная витрина) |
+| CORS | origin `https://agora-trade.vercel.app` + preview `agora-*.vercel.app` |
+| Кириллица | может быть `\u041c...` в raw JSON — `response.json()` разворачивает сам |
+| Только active | inactive поставщики/офферы **не** отдаются (404 на show) |
+| Пагинация | Laravel: `data` + `meta` + `links` |
+| Ошибки | `404` / `422` / `500` — body JSON с `message` где применимо |
 
-Параметры можно комбинировать: `?q=упак&city=Москва&per_page=10`
+### Headers (рекомендуется)
 
-**Пример ответа:**
+```http
+Accept: application/json
+```
+
+### Env на фронте (пример)
+
+```env
+NEXT_PUBLIC_API_URL=https://agora.178.88.115.213.sslip.io/api
+```
+
+---
+
+## Карта эндпоинтов
+
+| Метод | Путь | Назначение |
+|---|---|---|
+| GET | `/api/categories` | Список категорий (фильтры, меню) |
+| GET | `/api/suppliers` | Список активных поставщиков |
+| GET | `/api/suppliers/{id}` | Карточка поставщика |
+| GET | `/api/offers` | Каталог офферов (SKU) — **основной для сравнения** |
+| GET | `/api/offers/{id}` | Карточка оффера |
+
+Файлы (логотипы/фото) — абсолютные URL в полях `logo_url` / `photo_url`, вида:
+
+```text
+https://agora.178.88.115.213.sslip.io/files/...
+```
+
+Можно сразу в `<img src={url} />`.
+
+---
+
+## 1. Категории
+
+```http
+GET /api/categories
+```
+
+Без query-параметров. Только `is_active = true`, сортировка `sort_order`.
+
+### Ответ `200`
+
 ```json
 {
   "data": [
     {
-      "id": 2,
-      "commercial_name": "второй",
-      "legal_name": "юрвторой",
-      "inn": "500100732259",
-      "legal_address": "adress",
-      "logo_url": "https://web-production-78053c.up.railway.app/files/logos/Tfa...png",
+      "id": 1,
+      "slug": "corrugated-boxes",
+      "name": "Гофрокороба",
+      "priority": "high",
+      "sort_order": 10
+    },
+    {
+      "id": 3,
+      "slug": "stretch-film",
+      "name": "Стрейч-пленка",
+      "priority": "high",
+      "sort_order": 30
+    }
+  ]
+}
+```
+
+### Пилотные slug (справочно)
+
+| slug | Название |
+|---|---|
+| `corrugated-boxes` | Гофрокороба |
+| `corrugated-sheet` | Гофролист |
+| `stretch-film` | Стрейч-пленка |
+| `shrink-film` | Термоусадочная пленка |
+| `bubble-wrap` | Воздушно-пузырчатая пленка |
+| `foam-pe` | Вспененный полиэтилен |
+| `packing-tape` | Упаковочный скотч |
+| `strapping-tape` | Стреппинг-лента |
+| `courier-bags` | Курьерские и сейф-пакеты |
+| `zip-lock` | Zip-lock пакеты |
+| `fillers` | Наполнители |
+| `thermal-labels` | Термоэтикетки |
+| `pallets` | Паллеты |
+| `rpc` | Складская пластиковая тара |
+
+Для фильтров каталога используй `slug` → `GET /api/offers?category=stretch-film`.
+
+---
+
+## 2. Поставщики
+
+### 2.1. Список
+
+```http
+GET /api/suppliers
+```
+
+Только **активные**, сортировка по `commercial_name` ASC.
+
+#### Query
+
+| Параметр | Тип | Default | Описание |
+|---|---|---|---|
+| `q` | string | — | Поиск по commercial_name / legal_name (LIKE) |
+| `city` | string | — | Точное совпадение города отгрузки |
+| `per_page` | int | `20` | 1…100 |
+| `page` | int | `1` | Номер страницы |
+
+```http
+GET /api/suppliers?q=паллет&city=Москва&per_page=20&page=1
+```
+
+#### Ответ `200`
+
+```json
+{
+  "data": [
+    {
+      "id": 1,
+      "commercial_name": "ПакПоставка",
+      "legal_name": "ООО ПакПоставка",
+      "inn": "7707083893",
+      "legal_address": "г. Москва, …",
+      "logo_url": "https://agora.178.88.115.213.sslip.io/files/logos/xxx.png",
       "contact": {
-        "person": "Rauan Akhmetov",
-        "phone": "+7 775 839 3464",
-        "email": "rauan@progon.pro",
+        "person": "Иван Иванов",
+        "phone": "+7 999 000-00-00",
+        "email": "sales@example.com",
         "website": "https://example.com",
-        "telegram": null
+        "telegram": "@pack"
       },
-      "shipping_cities": ["Москва"]
+      "shipping_cities": ["Москва", "Московская область"]
     }
   ],
   "links": {
-    "first": ".../api/suppliers?page=1",
-    "last":  ".../api/suppliers?page=1",
-    "prev":  null,
-    "next":  null
+    "first": "…/api/suppliers?page=1",
+    "last": "…/api/suppliers?page=3",
+    "prev": null,
+    "next": "…/api/suppliers?page=2"
   },
   "meta": {
     "current_page": 1,
-    "last_page": 1,
+    "last_page": 3,
     "per_page": 20,
-    "total": 2
+    "total": 42
   }
 }
 ```
 
-> Список поставщиков лежит в `data`. Информация о пагинации — в `meta`
-> (`current_page`, `last_page`, `total`) и `links` (`next`/`prev` — null,
-> если страницы нет).
+### 2.2. Один поставщик
 
----
-
-### 2. Один поставщик
-
-```
+```http
 GET /api/suppliers/{id}
 ```
 
-Возвращает одного активного поставщика по его `id`.
+| Код | Когда |
+|---|---|
+| `200` | найден и active |
+| `404` | нет id **или** inactive |
 
-- **200** — поставщик найден (объект в `data`).
-- **404** — поставщик не найден или неактивен.
-
-**Пример ответа:**
 ```json
 {
   "data": {
     "id": 1,
-    "commercial_name": "Тест",
-    "legal_name": "Тестюр",
+    "commercial_name": "ПакПоставка",
+    "legal_name": "ООО ПакПоставка",
     "inn": "7707083893",
-    "legal_address": "Kumisbekova",
-    "logo_url": "https://web-production-78053c.up.railway.app/files/logos/C0S...png",
+    "legal_address": "…",
+    "logo_url": "https://…/files/logos/….png",
     "contact": {
-      "person": "Rauan Akhmetov",
-      "phone": "87758393464",
-      "email": "admin@agora.com",
-      "website": "https://example.com",
+      "person": "…",
+      "phone": "…",
+      "email": "…",
+      "website": "…",
       "telegram": null
     },
-    "shipping_cities": ["Astana"]
+    "shipping_cities": ["Москва"]
+  }
+}
+```
+
+### Поля поставщика
+
+| Поле | Тип | Nullable | Описание |
+|---|---|---|---|
+| `id` | number | нет | ID |
+| `commercial_name` | string | нет | Коммерческое название |
+| `legal_name` | string | да | Юр. название |
+| `inn` | string | нет | ИНН 10/12 |
+| `legal_address` | string | да | Адрес |
+| `logo_url` | string | да | Абсолютный URL логотипа |
+| `contact.person` | string | да | Контакт |
+| `contact.phone` | string | да | Телефон |
+| `contact.email` | string | да | Email |
+| `contact.website` | string | да | Сайт |
+| `contact.telegram` | string | да | Telegram |
+| `shipping_cities` | string[] | нет* | Города отгрузки (`[]` если нет) |
+
+\* массив всегда присутствует при `with cities`, может быть пустым.
+
+---
+
+## 3. Офферы (SKU) — главный каталог
+
+Оффер = предложение поставщика по конкретному товару упаковки  
+(цена, MOQ, наличие, регион, тех. характеристики).
+
+### 3.1. Список
+
+```http
+GET /api/offers
+```
+
+Только **опубликованные** (`is_active`), сортировка по **`price_value` ASC** (дешёвые сверху).
+
+#### Query
+
+| Параметр | Тип | Default | Описание |
+|---|---|---|---|
+| `q` | string | — | Поиск по `offer_title` |
+| `category` | string | — | **slug** категории (`stretch-film`) |
+| `category_id` | int | — | id категории |
+| `supplier_id` | int | — | id поставщика |
+| `stock_status` | string | — | точное значение, см. ниже |
+| `region` | string | — | регион из `delivery_regions` (JSON contains) |
+| `per_page` | int | `20` | 1…100 |
+| `page` | int | `1` | страница |
+
+Примеры:
+
+```http
+GET /api/offers?category=corrugated-boxes&region=Москва&per_page=24
+GET /api/offers?q=стрейч&stock_status=В%20наличии
+GET /api/offers?supplier_id=1&category_id=3
+```
+
+#### `stock_status` (допустимые значения)
+
+- `В наличии`
+- `Под заказ`
+- `Нет в наличии`
+- `Ожидается`
+
+#### `region` (допустимые в пилоте)
+
+- `Москва`
+- `Московская область`
+- `ЦФО`
+- `Россия`
+
+#### Ответ `200`
+
+```json
+{
+  "data": [
+    {
+      "id": 12,
+      "offer_title": "Гофрокороб Т-23 B 400x300x200",
+      "supplier": {
+        "id": 1,
+        "commercial_name": "ПакПоставка",
+        "logo_url": "https://…/files/logos/….png"
+      },
+      "category": {
+        "id": 1,
+        "slug": "corrugated-boxes",
+        "name": "Гофрокороба"
+      },
+      "price_value": 18.5,
+      "currency": "RUB",
+      "price_basis": "шт",
+      "moq_value": 100,
+      "stock_status": "В наличии",
+      "production_lead_days": 5,
+      "delivery_lead_days": 2,
+      "delivery_regions": ["Москва", "Московская область"],
+      "pickup_available": true,
+      "payment_terms": "Безнал",
+      "vat_rate": "20",
+      "branding_available": false,
+      "photo_url": "https://…/files/offers/….jpg",
+      "description_short": "Подходит для маркетплейсов…",
+      "specs": {
+        "box_type": "Четырехклапанный",
+        "inner_length_mm": 400,
+        "inner_width_mm": 300,
+        "inner_height_mm": 200,
+        "board_grade": "Т-23",
+        "flute_profile": "B"
+      }
+    }
+  ],
+  "links": { "first": "…", "last": "…", "prev": null, "next": null },
+  "meta": {
+    "current_page": 1,
+    "last_page": 1,
+    "per_page": 20,
+    "total": 1
+  }
+}
+```
+
+### 3.2. Один оффер
+
+```http
+GET /api/offers/{id}
+```
+
+| Код | Когда |
+|---|---|
+| `200` | найден и active |
+| `404` | нет / inactive |
+
+Объект в `data` — тот же shape, что элемент списка.
+
+---
+
+## 4. Поля оффера (для UI и сравнения)
+
+### Коммерческие (общие для всех категорий)
+
+| Поле | Тип | Nullable | UI / зачем |
+|---|---|---|---|
+| `id` | number | нет | ключ, ссылка `/offers/[id]` |
+| `offer_title` | string | нет | заголовок карточки |
+| `supplier` | object | нет* | блок поставщика |
+| `supplier.id` | number | | ссылка на поставщика |
+| `supplier.commercial_name` | string | | имя |
+| `supplier.logo_url` | string\|null | | лого |
+| `category` | object | нет* | бейдж категории |
+| `category.id` | number | | |
+| `category.slug` | string | | фильтр / роут |
+| `category.name` | string | | подпись RU |
+| `price_value` | number | нет | **главный** критерий сравнения |
+| `currency` | string | нет | `RUB` \| `CNY` \| `USD` \| `EUR` |
+| `price_basis` | string | нет | ед. продажи: `шт`, `рулон`, `лист`, `кг`, `м`, `м2`, `м3`, `комплект`, `паллета`, `упаковка` |
+| `moq_value` | number | нет | мин. партия |
+| `stock_status` | string | нет | наличие |
+| `production_lead_days` | number\|null | да | срок пр-ва, дни |
+| `delivery_lead_days` | number\|null | да | срок доставки, дни |
+| `delivery_regions` | string[] | нет | регионы поставки |
+| `pickup_available` | boolean | нет | самовывоз |
+| `payment_terms` | string | нет | условия оплаты |
+| `vat_rate` | string | нет | `20` \| `10` \| `0` \| `Без НДС` |
+| `branding_available` | boolean | нет | брендирование |
+| `photo_url` | string\|null | да | главное фото |
+| `description_short` | string\|null | да | описание |
+| `specs` | object | нет | тех. поля категории (ключ→значение) |
+
+\* в list/show всегда подгружаются `supplier` и `category`.
+
+### `specs` — динамика по категории
+
+Ключи зависят от `category.slug`. Неизвестные ключи не показывай;  
+для UI используй **human labels** на фронте (маппинг) или выводи `key: value`.
+
+Примеры:
+
+**Гофрокороба** (`corrugated-boxes`):
+
+| key | пример |
+|---|---|
+| `box_type` | `Четырехклапанный` |
+| `inner_length_mm` | `400` |
+| `inner_width_mm` | `300` |
+| `inner_height_mm` | `200` |
+| `board_grade` | `Т-23` |
+| `flute_profile` | `B` |
+
+**Стрейч-пленка** (`stretch-film`):
+
+| key | пример |
+|---|---|
+| `stretch_type` | `Ручная` |
+| `stretch_width_mm` | `500` |
+| `stretch_thickness_mkm` | `20` |
+| `stretch_length_m` | `300` |
+
+**Паллеты** (`pallets`):
+
+| key | пример |
+|---|---|
+| `pallet_material` | `Дерево` |
+| `pallet_length_mm` | `1200` |
+| `pallet_width_mm` | `800` |
+| `pallet_dynamic_load_kg` | `1500` |
+
+Числа в `specs` могут приходить как number **или** string — нормализуй: `Number(x)`.
+
+---
+
+## 5. Пагинация (Laravel)
+
+Всегда смотри `meta`:
+
+```ts
+type PageMeta = {
+  current_page: number
+  last_page: number
+  per_page: number
+  total: number
+  // также могут быть from, to, path, links[]
+}
+```
+
+- Следующая страница: `?page={current_page + 1}` пока `current_page < last_page`
+- `links.next` / `links.prev` — готовые URL или `null`
+
+---
+
+## 6. TypeScript-типы (копипаст)
+
+```ts
+export type Supplier = {
+  id: number
+  commercial_name: string
+  legal_name: string | null
+  inn: string
+  legal_address: string | null
+  logo_url: string | null
+  contact: {
+    person: string | null
+    phone: string | null
+    email: string | null
+    website: string | null
+    telegram: string | null
+  }
+  shipping_cities: string[]
+}
+
+export type Category = {
+  id: number
+  slug: string
+  name: string
+  priority: string
+  sort_order: number
+}
+
+export type Offer = {
+  id: number
+  offer_title: string
+  supplier: {
+    id: number
+    commercial_name: string
+    logo_url: string | null
+  }
+  category: {
+    id: number
+    slug: string
+    name: string
+  }
+  price_value: number
+  currency: string
+  price_basis: string
+  moq_value: number
+  stock_status: string
+  production_lead_days: number | null
+  delivery_lead_days: number | null
+  delivery_regions: string[]
+  pickup_available: boolean
+  payment_terms: string
+  vat_rate: string
+  branding_available: boolean
+  photo_url: string | null
+  description_short: string | null
+  specs: Record<string, string | number | boolean>
+}
+
+export type Paginated<T> = {
+  data: T[]
+  links: {
+    first: string | null
+    last: string | null
+    prev: string | null
+    next: string | null
+  }
+  meta: {
+    current_page: number
+    last_page: number
+    per_page: number
+    total: number
   }
 }
 ```
 
 ---
 
-## Описание полей поставщика
+## 7. Примеры (Next.js / fetch)
 
-| Поле               | Тип             | Описание                                              |
-|--------------------|-----------------|------------------------------------------------------|
-| `id`               | number          | Идентификатор поставщика                              |
-| `commercial_name`  | string          | Коммерческое название компании                       |
-| `legal_name`       | string \| null  | Юридическое название                                  |
-| `inn`              | string          | ИНН                                                  |
-| `legal_address`    | string \| null  | Фактический адрес регистрации                        |
-| `logo_url`         | string \| null  | Полная ссылка на логотип (можно вставлять в `<img>`) |
-| `contact.person`   | string \| null  | Контактное лицо                                      |
-| `contact.phone`    | string \| null  | Телефон                                              |
-| `contact.email`    | string \| null  | Email                                                |
-| `contact.website`  | string \| null  | Сайт                                                 |
-| `contact.telegram` | string \| null  | Telegram                                             |
-| `shipping_cities`  | string[]        | Города отгрузки                                       |
+```ts
+const API = process.env.NEXT_PUBLIC_API_URL! // …/api
 
-> Любое поле, кроме `id`, `commercial_name`, `inn` и `shipping_cities`,
-> может быть `null` — на фронте стоит это учитывать.
-
----
-
-## Примеры использования (JavaScript / fetch)
-
-```js
-const API = "https://web-production-78053c.up.railway.app/api";
-
-// Список поставщиков
-const res = await fetch(`${API}/suppliers`);
-const { data, meta } = await res.json();
-console.log(data);          // массив поставщиков
-console.log(meta.total);    // всего записей
-
-// Поиск + фильтр по городу
-const res2 = await fetch(`${API}/suppliers?q=упак&city=Москва`);
-const { data: found } = await res2.json();
-
-// Один поставщик
-const res3 = await fetch(`${API}/suppliers/1`);
-if (res3.ok) {
-  const { data: supplier } = await res3.json();
+async function getJson<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${API}${path}`, {
+    ...init,
+    headers: { Accept: 'application/json', ...(init?.headers || {}) },
+    // next: { revalidate: 60 }, // ISR при желании
+  })
+  if (!res.ok) {
+    throw new Error(`API ${res.status}: ${path}`)
+  }
+  return res.json() as Promise<T>
 }
 
-// Логотип — logo_url можно вставлять напрямую
-// <img src={supplier.logo_url} alt={supplier.commercial_name} />
+// Категории для сайдбара
+const { data: categories } = await getJson<{ data: Category[] }>('/categories')
+
+// Каталог: гофрокороба, Москва, страница 1
+const offersPage = await getJson<Paginated<Offer>>(
+  `/offers?category=corrugated-boxes&region=${encodeURIComponent('Москва')}&per_page=24&page=1`,
+)
+
+// Карточка
+const { data: offer } = await getJson<{ data: Offer }>('/offers/12')
+
+// Поставщики
+const suppliersPage = await getJson<Paginated<Supplier>>('/suppliers?per_page=50')
 ```
+
+### Сравнение офферов (логика витрины)
+
+Рекомендуемые колонки таблицы сравнения (из доков продукта):
+
+1. `price_value` + `currency` + `price_basis`
+2. `moq_value`
+3. `stock_status`
+4. `delivery_regions`
+5. `delivery_lead_days`
+6. размеры / материал из `specs` (зависят от категории)
+7. `branding_available`
+8. `supplier.commercial_name`
 
 ---
 
-### 3. Список офферов (SKU)
+## 8. Ошибки
 
-```
-GET /api/offers
-```
-
-Только **опубликованные** (`is_active`). Параметры: `q`, `category` (slug),
-`category_id`, `supplier_id`, `stock_status`, `region`, `per_page`, `page`.
-
-### 4. Один оффер
-
-```
-GET /api/offers/{id}
-```
-
----
-
-## Admin API (React SPA)
-
-Префикс `/api/admin/*`. Auth: **Bearer token** (Laravel Sanctum).
-
-| Метод | Путь | Описание |
+| HTTP | Когда | Что делать на UI |
 |---|---|---|
-| POST | `/api/admin/login` | `{ email, password }` → `{ token, user }` |
-| POST | `/api/admin/logout` | отозвать токен |
-| GET | `/api/admin/me` | текущий пользователь |
-| GET | `/api/admin/meta/categories` | категории + схема specs-полей |
-| GET | `/api/admin/meta/dictionaries` | enum-справочники |
-| GET/POST/… | `/api/admin/suppliers` | CRUD поставщиков |
-| GET/POST/… | `/api/admin/offers` | CRUD офферов |
+| `200` | ок | рендер |
+| `404` | нет сущности / inactive | empty state / not found page |
+| `422` | на public почти не бывает | — |
+| `500` | сбой сервера | toast «попробуйте позже» |
+| network | CORS / offline | проверить `NEXT_PUBLIC_API_URL` и CORS |
 
-Пример логина:
+Пример 404:
 
-```js
-const res = await fetch(`${API}/admin/login`, {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-  body: JSON.stringify({ email: 'admin@agora.local', password: 'password' }),
-});
-const { token } = await res.json();
-// дальше: Authorization: Bearer ${token}
+```json
+{
+  "message": "No query results for model [App\\Models\\Offer] 999"
+}
 ```
 
-Мультипарт (логотип/фото): `POST /api/admin/suppliers` и
-`POST /api/admin/offers` (update тоже через POST — удобнее для FormData).
-
-Схема тех. полей оффера зависит от категории (`config/agora.php`,
-документы фаундера: общие поля + specs по категории).
+или Laravel abort message.
 
 ---
 
-## Примечания
+## 9. CORS / домены
 
-- **CORS**: `FRONTEND_URL` + `ADMIN_FRONTEND_URL` (через запятую),
-  плюс превью `agora-*.vercel.app` / `agora-admin*.vercel.app` и localhost.
-- Публичное API отдаёт **только активных** поставщиков и офферов.
-- Админка: React SPA в `admin/` (Vercel). Legacy Blade `/admin` пока есть.
+Разрешены:
+
+- production frontend: `FRONTEND_URL` (сейчас `https://agora-trade.vercel.app`)
+- preview: pattern `https://agora-*.vercel.app`
+- localhost для дева
+
+Если новый домен фронта — напишите бэку, добавим в `FRONTEND_URL`.
+
+Запросы с **другого** origin без CORS → браузер заблокирует (это не баг API).
+
+---
+
+## 10. Что API **не** делает (пока)
+
+- ❌ регистрация / login покупателя  
+- ❌ корзина / заказ / оплата  
+- ❌ write с витрины  
+- ❌ WebSocket / realtime  
+- ❌ GraphQL  
+
+Каталог = read-only REST.
+
+---
+
+## 11. Быстрый smoke-test
+
+```bash
+curl -sS "https://agora.178.88.115.213.sslip.io/api/categories" | head
+curl -sS "https://agora.178.88.115.213.sslip.io/api/offers?per_page=5"
+curl -sS "https://agora.178.88.115.213.sslip.io/api/suppliers?per_page=5"
+curl -sS -o /dev/null -w "%{http_code}\n" "https://agora.178.88.115.213.sslip.io/up"
+```
+
+---
+
+## 12. Контакты / репозитории
+
+| | |
+|---|---|
+| Backend repo | https://github.com/Rauan228/agora-backend |
+| Frontend repo | https://github.com/paulzverev/agora |
+| Этот файл | `API.md` в backend-репо |
+| Вопросы по контракту | backend team (Rauan) |
+
+При breaking changes бэкенд обновляет этот файл и пишет в changelog PR.
+
+---
+
+*Последнее обновление: 2026-08 — prod URL VPS, offers + categories, публичный read-only API.*
