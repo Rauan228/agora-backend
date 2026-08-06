@@ -47,6 +47,7 @@ class SupplierController extends Controller
     public function store(StoreSupplierRequest $request)
     {
         $data = $request->validated();
+        unset($data['logo'], $data['cities']);
 
         if ($request->hasFile('logo')) {
             $data['logo_path'] = $request->file('logo')->store('logos', 'public');
@@ -62,9 +63,18 @@ class SupplierController extends Controller
             ->setStatusCode(201);
     }
 
+
     public function update(UpdateSupplierRequest $request, Supplier $supplier)
     {
         $data = $request->validated();
+        unset($data['logo'], $data['remove_logo'], $data['cities']);
+
+        if ($request->boolean('remove_logo') && ! $request->hasFile('logo')) {
+            if ($supplier->logo_path) {
+                Storage::disk('public')->delete($supplier->logo_path);
+            }
+            $data['logo_path'] = null;
+        }
 
         if ($request->hasFile('logo')) {
             if ($supplier->logo_path) {
@@ -82,6 +92,7 @@ class SupplierController extends Controller
 
         return new SupplierResource($supplier->fresh()->load('cities'));
     }
+
 
     public function destroy(Supplier $supplier)
     {

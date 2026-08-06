@@ -26,7 +26,9 @@ class StoreSupplierRequest extends FormRequest
             'website'         => ['nullable', 'url', 'max:255'],
             'telegram'        => ['nullable', 'string', 'max:255'],
             'is_active'       => ['boolean'],
-            'logo'            => ['nullable', 'image', 'mimes:png,jpg,jpeg,svg,webp', 'max:2048'], // до 2 МБ
+            // Логотип: квадрат 200–1024px рекомендуется; хранится в storage/app/public/logos
+            'logo'            => ['nullable', 'file', 'mimes:png,jpg,jpeg,webp', 'max:5120'], // до 5 МБ
+
             'cities'          => ['array'],
             'cities.*'        => ['string', 'max:255'],
         ];

@@ -16,7 +16,10 @@ class OfferResource extends JsonResource
             'supplier' => $this->whenLoaded('supplier', fn () => [
                 'id' => $this->supplier->id,
                 'commercial_name' => $this->supplier->commercial_name,
+                'logo_url' => $this->supplier->logo_url,
+                'inn' => $this->supplier->inn,
             ]),
+
             'category_id' => $this->category_id,
             'category' => $this->whenLoaded('category', fn () => [
                 'id' => $this->category->id,

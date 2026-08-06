@@ -51,12 +51,37 @@ class MetaController extends Controller
         ]);
     }
 
+    /**
+     * Опции поставщиков для селекта в форме оффера.
+     * ?q= — поиск по названию / ИНН (удобно при 25+ поставщиках).
+     * Отдаём logo_url для превью логотипа в админке.
+     */
     public function suppliersOptions()
     {
+        $q = trim((string) request()->query('q', ''));
+        $limit = min(max((int) request()->integer('limit', 50), 1), 200);
+
         $items = Supplier::query()
+            ->when($q !== '', function ($query) use ($q) {
+                $query->where(function ($sub) use ($q) {
+                    $sub->where('commercial_name', 'like', "%{$q}%")
+                        ->orWhere('legal_name', 'like', "%{$q}%")
+                        ->orWhere('inn', 'like', "%{$q}%");
+                });
+            })
             ->orderBy('commercial_name')
-            ->get(['id', 'commercial_name', 'is_active']);
+            ->limit($limit)
+            ->get(['id', 'commercial_name', 'legal_name', 'inn', 'logo_path', 'is_active'])
+            ->map(fn (Supplier $s) => [
+                'id' => $s->id,
+                'commercial_name' => $s->commercial_name,
+                'legal_name' => $s->legal_name,
+                'inn' => $s->inn,
+                'logo_url' => $s->logo_url,
+                'is_active' => $s->is_active,
+            ]);
 
         return response()->json(['data' => $items]);
     }
 }
+

@@ -28,11 +28,13 @@ class UpdateSupplierRequest extends FormRequest
             'website'         => ['nullable', 'url', 'max:255'],
             'telegram'        => ['nullable', 'string', 'max:255'],
             'is_active'       => ['boolean'],
-            'logo'            => ['nullable', 'image', 'mimes:png,jpg,jpeg,svg,webp', 'max:2048'],
+            'logo'            => ['nullable', 'file', 'mimes:png,jpg,jpeg,webp', 'max:5120'], // до 5 МБ
+            'remove_logo'     => ['sometimes', 'boolean'],
             'cities'          => ['array'],
             'cities.*'        => ['string', 'max:255'],
         ];
     }
+
 
     public function attributes(): array
     {
