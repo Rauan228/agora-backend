@@ -64,14 +64,115 @@ NEXT_PUBLIC_API_URL=https://agora.178.88.115.213.sslip.io/api
 | GET | `/api/suppliers/{id}` | Карточка поставщика |
 | GET | `/api/offers` | Каталог офферов (SKU) — **основной для сравнения** |
 | GET | `/api/offers/{id}` | Карточка оффера |
+| GET | `/files/{path}` | Отдача файла (лого / фото) — **не** вызывается руками, URL уже в JSON |
 
-Файлы (логотипы/фото) — абсолютные URL в полях `logo_url` / `photo_url`, вида:
+---
+
+## 0. Логотипы и фото (обязательно прочитать)
+
+Отдельного «logo API» **нет**. Картинки приходят **готовыми HTTPS-ссылками** в JSON.  
+Загрузка файлов — только через **админку**. Витрина **только читает**.
+
+### Какие поля
+
+| Поле | Где | Что это |
+|---|---|---|
+| `logo_url` | `GET /api/suppliers`, `GET /api/suppliers/{id}` | логотип **компании-поставщика** |
+| `supplier.logo_url` | `GET /api/offers`, `GET /api/offers/{id}` | то же лого, уже внутри оффера |
+| `photo_url` | `GET /api/offers`, `GET /api/offers/{id}` | **главное фото оффера** (товар) |
+
+Тип: `string | null`.
+
+- есть файл → полный URL, например  
+  `https://agora.178.88.115.213.sslip.io/files/logos/Ab12cd.webp`
+- нет файла → **`null`** (на UI нужен **плейсхолдер**, не битая картинка)
+
+### Как отдаётся файл
+
+URL строится бэкендом как:
 
 ```text
-https://agora.178.88.115.213.sslip.io/files/...
+{APP_URL}/files/{relative_path}
 ```
 
-Можно сразу в `<img src={url} />`.
+Примеры путей:
+
+```text
+/files/logos/xxxx.webp     ← лого поставщика
+/files/offers/yyyy.jpg     ← фото оффера
+```
+
+Фронту **не нужно** собирать путь самому и **не нужно** ходить на `/files/...` без `logo_url`/`photo_url` из JSON.  
+Просто:
+
+```tsx
+// лого поставщика (список / карточка supplier)
+{supplier.logo_url ? (
+  <img src={supplier.logo_url} alt={supplier.commercial_name} />
+) : (
+  <div className="placeholder">{/* инициалы / иконка */}</div>
+)}
+
+// лого в карточке оффера
+{offer.supplier?.logo_url ? (
+  <img
+    src={offer.supplier.logo_url}
+    alt={offer.supplier.commercial_name}
+  />
+) : null}
+
+// фото товара
+{offer.photo_url ? (
+  <img src={offer.photo_url} alt={offer.offer_title} />
+) : (
+  <div className="placeholder">Нет фото</div>
+)}
+```
+
+### Важные детали для Next.js
+
+1. **`logo_url` / `photo_url` уже абсолютные** (`https://…`). Не префиксируй `NEXT_PUBLIC_API_URL`.
+2. Если используешь `next/image`, добавь хост API в `next.config`:
+
+```js
+// next.config.js / next.config.mjs
+images: {
+  remotePatterns: [
+    {
+      protocol: 'https',
+      hostname: 'agora.178.88.115.213.sslip.io',
+      pathname: '/files/**',
+    },
+  ],
+},
+```
+
+   Либо используй обычный `<img>` — проще, без конфига.
+
+3. **CORS на `/files/*`**: картинки в `<img src>` не требуют CORS.  
+   Проблемы CORS бывают только у `fetch` к `/api/*` с чужого origin.
+4. Форматы с бэка: **PNG, JPG, WebP** (лого и фото). Размер файла до ~5 МБ (лого) / ~10 МБ (фото оффера) — на витрине это уже готовые URL.
+5. **Не** жди base64, blob-id или отдельного `GET /api/logos/{id}` — такого контракта нет.
+6. Кэш: URL стабильный, пока файл не заменят в админке (при замене путь обычно новый).
+
+### Мини-пример ответа оффера (фрагмент)
+
+```json
+{
+  "data": {
+    "id": 12,
+    "offer_title": "Гофрокороб Т-23 B 400x300x200",
+    "photo_url": "https://agora.178.88.115.213.sslip.io/files/offers/abc.webp",
+    "supplier": {
+      "id": 1,
+      "commercial_name": "ПакПоставка",
+      "logo_url": "https://agora.178.88.115.213.sslip.io/files/logos/xyz.webp"
+    }
+  }
+}
+```
+
+Если `photo_url` или `logo_url` = `null` — в админке просто ещё не загрузили файл.
 
 ---
 
@@ -557,20 +658,24 @@ const { data: offer } = await getJson<{ data: Offer }>('/offers/12')
 
 // Поставщики
 const suppliersPage = await getJson<Paginated<Supplier>>('/suppliers?per_page=50')
+
+// Картинки — только из полей ответа (см. раздел 0)
+// offer.photo_url, offer.supplier.logo_url, supplier.logo_url
 ```
 
 ### Сравнение офферов (логика витрины)
 
 Рекомендуемые колонки таблицы сравнения (из доков продукта):
 
-1. `price_value` + `currency` + `price_basis`
-2. `moq_value`
+1. `price_value` + `currency` + `price_basis` (учти `price_hidden`: цена может быть `null`)
+2. `moq_value` + `order_step`
 3. `stock_status`
 4. `delivery_regions`
 5. `delivery_lead_days`
 6. размеры / материал из `specs` (зависят от категории)
 7. `branding_available`
-8. `supplier.commercial_name`
+8. `supplier.commercial_name` + `supplier.logo_url` (аватар в строке сравнения)
+
 
 ---
 
@@ -646,4 +751,5 @@ curl -sS -o /dev/null -w "%{http_code}\n" "https://agora.178.88.115.213.sslip.io
 
 ---
 
-*Последнее обновление: 2026-08 — prod URL VPS, offers + categories, публичный read-only API.*
+*Последнее обновление: 2026-08 — prod URL VPS, offers + categories, logo_url/photo_url для витрины, публичный read-only API.*
+
