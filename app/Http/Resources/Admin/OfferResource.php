@@ -12,6 +12,8 @@ class OfferResource extends JsonResource
         return [
             'id' => $this->id,
             'offer_title' => $this->offer_title,
+            'sku' => $this->sku,
+            'supplier_product_code' => $this->supplier_product_code,
             'supplier_id' => $this->supplier_id,
             'supplier' => $this->whenLoaded('supplier', fn () => [
                 'id' => $this->supplier->id,
@@ -27,9 +29,11 @@ class OfferResource extends JsonResource
                 'name' => $this->category->name,
             ]),
             'price_value' => (float) $this->price_value,
+            'price_hidden' => (bool) $this->price_hidden,
             'currency' => $this->currency,
             'price_basis' => $this->price_basis,
             'moq_value' => $this->moq_value,
+            'order_step' => (int) ($this->order_step ?? 1),
             'stock_status' => $this->stock_status,
             'production_lead_days' => $this->production_lead_days,
             'delivery_lead_days' => $this->delivery_lead_days,
@@ -38,6 +42,7 @@ class OfferResource extends JsonResource
             'payment_terms' => $this->payment_terms,
             'vat_rate' => $this->vat_rate,
             'branding_available' => $this->branding_available,
+            'custom_manufacturing' => (bool) $this->custom_manufacturing,
             'photo_url' => $this->photo_url,
             'description_short' => $this->description_short,
             'specs' => $this->specs ?? [],

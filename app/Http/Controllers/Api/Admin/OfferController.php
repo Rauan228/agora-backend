@@ -60,6 +60,9 @@ class OfferController extends Controller
         $data['is_active'] = $request->boolean('is_active', true);
         $data['pickup_available'] = $request->boolean('pickup_available', false);
         $data['branding_available'] = $request->boolean('branding_available', false);
+        $data['price_hidden'] = $request->boolean('price_hidden', false);
+        $data['custom_manufacturing'] = $request->boolean('custom_manufacturing', false);
+        $data['order_step'] = (int) ($data['order_step'] ?? 1);
 
         $offer = Offer::create($data);
 
@@ -95,6 +98,12 @@ class OfferController extends Controller
         if ($request->has('branding_available')) {
             $data['branding_available'] = $request->boolean('branding_available');
         }
+        if ($request->has('price_hidden')) {
+            $data['price_hidden'] = $request->boolean('price_hidden');
+        }
+        if ($request->has('custom_manufacturing')) {
+            $data['custom_manufacturing'] = $request->boolean('custom_manufacturing');
+        }
 
         $offer->update($data);
 
@@ -121,10 +130,14 @@ class OfferController extends Controller
             'supplier_id' => [$offer ? 'sometimes' : 'required', 'integer', 'exists:suppliers,id'],
             'category_id' => [$offer ? 'sometimes' : 'required', 'integer', 'exists:categories,id'],
             'offer_title' => [$offer ? 'sometimes' : 'required', 'string', 'min:5', 'max:180'],
+            'sku' => ['nullable', 'string', 'max:100'],
+            'supplier_product_code' => ['nullable', 'string', 'max:100'],
             'price_value' => [$offer ? 'sometimes' : 'required', 'numeric', 'min:0.01', 'max:9999999.99'],
+            'price_hidden' => ['sometimes', 'boolean'],
             'currency' => [$offer ? 'sometimes' : 'required', 'string', Rule::in($currencies)],
             'price_basis' => [$offer ? 'sometimes' : 'required', 'string', Rule::in(config('agora.dictionaries.price_basis', []))],
             'moq_value' => [$offer ? 'sometimes' : 'required', 'integer', 'min:1', 'max:1000000'],
+            'order_step' => [$offer ? 'sometimes' : 'required', 'integer', 'min:1', 'max:1000000'],
             'stock_status' => [$offer ? 'sometimes' : 'required', 'string', Rule::in(config('agora.dictionaries.stock_status', []))],
             'production_lead_days' => ['nullable', 'integer', 'min:0', 'max:180'],
             'delivery_lead_days' => ['nullable', 'integer', 'min:0', 'max:60'],
@@ -134,22 +147,28 @@ class OfferController extends Controller
             'payment_terms' => [$offer ? 'sometimes' : 'required', 'string', Rule::in(config('agora.dictionaries.payment_terms', []))],
             'vat_rate' => [$offer ? 'sometimes' : 'required', 'string', Rule::in(config('agora.dictionaries.vat_rate', []))],
             'branding_available' => ['sometimes', 'boolean'],
-            'photo' => [$offer ? 'nullable' : 'nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
+            'custom_manufacturing' => ['sometimes', 'boolean'],
+            'photo' => ['nullable', 'image', 'mimes:jpg,jpeg,png,webp', 'max:10240'],
             'description_short' => ['nullable', 'string', 'max:2000'],
-
             'is_active' => ['sometimes', 'boolean'],
         ], [], [
             'offer_title' => 'название оффера',
+            'sku' => 'артикул',
+            'supplier_product_code' => 'код товара поставщика',
             'price_value' => 'цена',
+            'price_hidden' => 'цена скрыта',
             'price_basis' => 'единица продажи',
             'moq_value' => 'MOQ',
+            'order_step' => 'шаг заказа',
             'stock_status' => 'статус наличия',
             'delivery_regions' => 'регион поставки',
             'payment_terms' => 'условия оплаты',
             'vat_rate' => 'НДС',
+            'custom_manufacturing' => 'изготовление под заказ',
             'photo' => 'фото',
             'description_short' => 'описание',
         ]);
+
 
         // multipart: delivery_regions может прийти JSON-строкой
         if ($request->has('delivery_regions') && is_string($request->input('delivery_regions'))) {

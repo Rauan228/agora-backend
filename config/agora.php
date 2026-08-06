@@ -13,33 +13,40 @@ return [
 
     'currencies' => ['RUB', 'CNY', 'USD', 'EUR'],
 
+    // Справочники из xlsx «Агора_поля_по_категориям_backend_расширено», лист 04.
     'dictionaries' => [
         'price_basis' => ['шт', 'рулон', 'лист', 'кг', 'м', 'м2', 'м3', 'комплект', 'паллета', 'упаковка'],
         'stock_status' => ['В наличии', 'Под заказ', 'Нет в наличии', 'Ожидается'],
         'vat_rate' => ['20', '10', '0', 'Без НДС'],
         'delivery_region' => ['Москва', 'Московская область', 'ЦФО', 'Россия'],
         'payment_terms' => ['Безнал', 'Предоплата 100%', '50/50', 'Постоплата', 'Отсрочка', 'Наличные'],
-        'material' => ['ПЭ', 'ПП', 'ПВД', 'HDPE', 'LDPE', 'BOPP', 'PVC', 'Бумага', 'Картон', 'Дерево', 'Пластик', 'Сталь', 'Алюминий'],
+        'material_general' => ['ПЭ', 'ПП', 'ПВД', 'HDPE', 'LDPE', 'BOPP', 'PVC', 'Бумага', 'Картон', 'Дерево', 'Пластик', 'Сталь', 'Алюминий'],
         'board_grade' => ['Т-21', 'Т-22', 'Т-23', 'Т-24', 'П-31', 'П-32', 'П-33'],
         'flute_profile' => ['E', 'B', 'C', 'BC', 'BE'],
+        'box_type' => ['Четырёхклапанный', 'Самосборный', 'Архивный', 'Крышка-дно', 'Почтовый', 'Другой'],
+        'box_ply_count' => ['3', '5', '7'],
+        'liner_color' => ['Бурый', 'Белый', 'Крафт', 'Цветной'],
+        'closing_type' => ['Клейкая лента', 'Самосборный замок', 'Скобы', 'Клей', 'Без закрывания'],
+        'print_type' => ['Флексография', 'Офсет', 'Шелкография', 'Цифровая', 'Без печати'],
+        // прочие категории (заготовка, полный V1 — по запросу Стаса)
         'adhesive_type' => ['Акрил', 'Hot melt', 'Каучук', 'Solvent'],
         'label_print_type' => ['Термо ЭКО', 'Термо ТОП', 'Термотрансфер'],
         'shrink_material' => ['ПОФ', 'ПВХ', 'ПЭ'],
         'bag_material' => ['ПВД', 'ПП', 'BOPP', 'CPP', 'Kraft/PE', 'PET/PE', 'PA/PE'],
         'tape_base_material' => ['BOPP', 'PVC', 'Бумага', 'Ткань/ПЭ'],
-        'box_type' => ['Четырехклапанный', 'Самосборный', 'Архивный', 'Крышка-дно', 'Почтовый'],
         'stretch_type' => ['Ручная', 'Машинная', 'Престрейч', 'Джамбо'],
         'shrink_format' => ['Полотно', 'Рукав', 'Полурукав'],
         'bubble_layers' => ['2', '3'],
         'foam_pe_form' => ['Рулон', 'Лист', 'Профиль', 'Пакет'],
-        'strap_material' => ['ПП', 'ПЭТ', 'Сталь'],
+        'strap_material' => ['ПП', 'ПЭТ', 'Сталь', 'Бумага', 'Корд'],
         'zip_material' => ['ПВД', 'ПП'],
-        'filler_type' => ['Бумажный', 'Воздушные подушки', 'Пенополистирол', 'ВПП-крошка', 'Honeycomb'],
+        'filler_type' => ['Бумажный', 'Воздушные подушки', 'Пенополистирол', 'Крахмальный', 'Honeycomb'],
         'filler_material' => ['Бумага', 'ПЭ', 'Пенополистирол', 'Крахмал'],
-        'pallet_material' => ['Дерево', 'Пластик', 'Гофрокартон'],
-        'rpc_format_type' => ['Евроконтейнер', 'KLT', 'Складской лоток', 'Ящик с крышкой'],
+        'pallet_material' => ['Дерево', 'Пластик', 'Гофрокартон', 'Металл'],
+        'rpc_format_type' => ['Евроконтейнер', 'KLT', 'Складской лоток', 'Ящик с крышкой', 'Складной контейнер'],
         'sheet_format' => ['Лист', 'Рулон'],
     ],
+
 
     /**
      * Пилотные категории + схема specs-полей.
@@ -48,20 +55,34 @@ return [
      * unit, min, max, required
      */
     'categories' => [
+        // Полный V1 + V1 optional по листу «08 Гофрокороба» (файл Стаса 06.08.2026).
+        // V2 (склейка, BCT, влагостойкость…) — не подключаем до отдельного запроса.
         [
             'slug' => 'corrugated-boxes',
             'name' => 'Гофрокороба',
             'priority' => 'high',
             'sort_order' => 10,
+            'schema_version' => 'boxes_v1_2026_08',
             'fields' => [
-                ['key' => 'box_type', 'label' => 'Тип конструкции', 'type' => 'enum', 'dictionary' => 'box_type', 'required' => true],
-                ['key' => 'inner_length_mm', 'label' => 'Внутренняя длина', 'type' => 'number', 'unit' => 'мм', 'min' => 50, 'max' => 3000, 'required' => true],
-                ['key' => 'inner_width_mm', 'label' => 'Внутренняя ширина', 'type' => 'number', 'unit' => 'мм', 'min' => 50, 'max' => 3000, 'required' => true],
-                ['key' => 'inner_height_mm', 'label' => 'Внутренняя высота', 'type' => 'number', 'unit' => 'мм', 'min' => 20, 'max' => 3000, 'required' => true],
-                ['key' => 'board_grade', 'label' => 'Марка картона', 'type' => 'enum', 'dictionary' => 'board_grade', 'required' => true],
-                ['key' => 'flute_profile', 'label' => 'Профиль гофры', 'type' => 'enum', 'dictionary' => 'flute_profile', 'required' => true],
+                // --- V1 обязательные ---
+                ['key' => 'box_type', 'label' => 'Тип конструкции', 'type' => 'enum', 'dictionary' => 'box_type', 'required' => true, 'version' => 'v1', 'filter' => true],
+                ['key' => 'box_inner_length_mm', 'label' => 'Внутренняя длина', 'type' => 'number', 'unit' => 'мм', 'min' => 50, 'max' => 3000, 'required' => true, 'version' => 'v1', 'filter' => true],
+                ['key' => 'box_inner_width_mm', 'label' => 'Внутренняя ширина', 'type' => 'number', 'unit' => 'мм', 'min' => 50, 'max' => 3000, 'required' => true, 'version' => 'v1', 'filter' => true],
+                ['key' => 'box_inner_height_mm', 'label' => 'Внутренняя высота', 'type' => 'number', 'unit' => 'мм', 'min' => 20, 'max' => 3000, 'required' => true, 'version' => 'v1', 'filter' => true],
+                ['key' => 'box_board_grade', 'label' => 'Марка картона', 'type' => 'enum', 'dictionary' => 'board_grade', 'required' => true, 'version' => 'v1', 'filter' => true],
+                ['key' => 'box_flute_profile', 'label' => 'Профиль гофры', 'type' => 'enum', 'dictionary' => 'flute_profile', 'required' => true, 'version' => 'v1', 'filter' => true],
+                // --- V1 optional ---
+                ['key' => 'box_fefco_code', 'label' => 'Код конструкции FEFCO', 'type' => 'string', 'required' => false, 'version' => 'v1_optional', 'filter' => true, 'hint' => '4-значный код, напр. 0201'],
+                ['key' => 'box_outer_length_mm', 'label' => 'Внешняя длина', 'type' => 'number', 'unit' => 'мм', 'min' => 50, 'max' => 3100, 'required' => false, 'version' => 'v1_optional'],
+                ['key' => 'box_outer_width_mm', 'label' => 'Внешняя ширина', 'type' => 'number', 'unit' => 'мм', 'min' => 50, 'max' => 3100, 'required' => false, 'version' => 'v1_optional'],
+                ['key' => 'box_outer_height_mm', 'label' => 'Внешняя высота', 'type' => 'number', 'unit' => 'мм', 'min' => 20, 'max' => 3100, 'required' => false, 'version' => 'v1_optional'],
+                ['key' => 'box_ply_count', 'label' => 'Количество слоёв', 'type' => 'enum', 'dictionary' => 'box_ply_count', 'required' => false, 'version' => 'v1_optional', 'filter' => true],
+                ['key' => 'box_liner_color', 'label' => 'Цвет лайнера', 'type' => 'enum', 'dictionary' => 'liner_color', 'required' => false, 'version' => 'v1_optional', 'filter' => true],
+                ['key' => 'box_closure_type', 'label' => 'Тип закрывания', 'type' => 'enum', 'dictionary' => 'closing_type', 'required' => false, 'version' => 'v1_optional', 'filter' => true],
+                ['key' => 'box_print_available', 'label' => 'Печать доступна', 'type' => 'boolean', 'required' => false, 'version' => 'v1_optional', 'filter' => true],
             ],
         ],
+
         [
             'slug' => 'corrugated-sheet',
             'name' => 'Гофролист',

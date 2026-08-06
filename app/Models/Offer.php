@@ -11,10 +11,14 @@ class Offer extends Model
         'supplier_id',
         'category_id',
         'offer_title',
+        'sku',
+        'supplier_product_code',
         'price_value',
+        'price_hidden',
         'currency',
         'price_basis',
         'moq_value',
+        'order_step',
         'stock_status',
         'production_lead_days',
         'delivery_lead_days',
@@ -23,6 +27,7 @@ class Offer extends Model
         'payment_terms',
         'vat_rate',
         'branding_available',
+        'custom_manufacturing',
         'photo_path',
         'description_short',
         'specs',
@@ -33,16 +38,20 @@ class Offer extends Model
     {
         return [
             'price_value' => 'decimal:2',
+            'price_hidden' => 'boolean',
             'moq_value' => 'integer',
+            'order_step' => 'integer',
             'production_lead_days' => 'integer',
             'delivery_lead_days' => 'integer',
             'delivery_regions' => 'array',
             'pickup_available' => 'boolean',
             'branding_available' => 'boolean',
+            'custom_manufacturing' => 'boolean',
             'specs' => 'array',
             'is_active' => 'boolean',
         ];
     }
+
 
     public function supplier(): BelongsTo
     {

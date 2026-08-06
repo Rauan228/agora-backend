@@ -53,12 +53,13 @@ class OfferSpecsValidator
                     }
                     break;
                 case 'boolean':
-                    $fieldRules[] = 'boolean';
+                    $fieldRules[] = 'nullable';
                     break;
                 default:
                     $fieldRules[] = 'string';
                     $fieldRules[] = 'max:255';
             }
+
 
             $rules["specs.$key"] = $fieldRules;
         }
@@ -74,14 +75,26 @@ class OfferSpecsValidator
             throw new ValidationException($validator);
         }
 
-        $allowed = collect($fields)->pluck('key')->all();
+        $fieldsByKey = collect($fields)->keyBy('key');
         $clean = [];
-        foreach ($allowed as $key) {
-            if (array_key_exists($key, $specs) && $specs[$key] !== '' && $specs[$key] !== null) {
-                $clean[$key] = $specs[$key];
+        foreach ($fieldsByKey as $key => $field) {
+            if (! array_key_exists($key, $specs) || $specs[$key] === '' || $specs[$key] === null) {
+                continue;
             }
+            $value = $specs[$key];
+            if (($field['type'] ?? '') === 'boolean') {
+                $value = filter_var($value, FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                if ($value === null) {
+                    continue;
+                }
+            }
+            if (($field['type'] ?? '') === 'number' && is_numeric($value)) {
+                $value = $value + 0; // int or float
+            }
+            $clean[$key] = $value;
         }
 
         return $clean;
     }
 }
+
