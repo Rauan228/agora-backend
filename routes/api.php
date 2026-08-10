@@ -1,7 +1,6 @@
 <?php
 
 use App\Http\Controllers\Api\Admin\AuthController as AdminAuthController;
-use App\Http\Controllers\Api\Admin\LeadController as AdminLeadController;
 use App\Http\Controllers\Api\Admin\MetaController as AdminMetaController;
 use App\Http\Controllers\Api\Admin\OfferController as AdminOfferController;
 use App\Http\Controllers\Api\Admin\SupplierController as AdminSupplierController;
@@ -59,17 +58,5 @@ Route::prefix('admin')->group(function () {
         Route::put('/offers/{offer}', [AdminOfferController::class, 'update']);
         Route::patch('/offers/{offer}', [AdminOfferController::class, 'update']);
         Route::delete('/offers/{offer}', [AdminOfferController::class, 'destroy']);
-
-        // Лиды / обзвон (источник → карточка → статусы)
-        Route::get('/leads/stats', [AdminLeadController::class, 'stats']);
-        Route::get('/leads/import-template', [AdminLeadController::class, 'importTemplate']);
-        Route::post('/leads/import', [AdminLeadController::class, 'importCsv']);
-        Route::get('/leads', [AdminLeadController::class, 'index']);
-        Route::post('/leads', [AdminLeadController::class, 'store']);
-        Route::get('/leads/{lead}', [AdminLeadController::class, 'show']);
-        Route::put('/leads/{lead}', [AdminLeadController::class, 'update']);
-        Route::patch('/leads/{lead}', [AdminLeadController::class, 'update']);
-        Route::delete('/leads/{lead}', [AdminLeadController::class, 'destroy']);
     });
 });
-
