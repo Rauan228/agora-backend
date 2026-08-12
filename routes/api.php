@@ -29,9 +29,11 @@ Route::get('/offers/{offer}', [OfferController::class, 'show']);
 |--------------------------------------------------------------------------
 */
 Route::prefix('ai')->group(function () {
+    Route::get('/catalog', [AiSessionController::class, 'catalog']);
     Route::post('/sessions', [AiSessionController::class, 'store']);
     Route::get('/sessions/{session}', [AiSessionController::class, 'show']);
     Route::post('/sessions/{session}/messages', [AiSessionController::class, 'message']);
+    Route::post('/sessions/{session}/stream', [AiSessionController::class, 'stream']);
     Route::post('/sessions/{session}/handoff', [AiSessionController::class, 'handoff']);
 });
 
