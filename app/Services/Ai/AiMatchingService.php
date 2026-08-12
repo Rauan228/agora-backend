@@ -82,6 +82,7 @@ class AiMatchingService
             'matches' => $result['matches'],
             'stats' => $result['stats'],
             'sort_mode' => $sortMode,
+            'intent_usage' => $parsed['usage'] ?? null,
         ];
     }
 
@@ -113,20 +114,53 @@ class AiMatchingService
      * @param  array<string, mixed>  $prepared
      * @return array<string, mixed>
      */
+    /**
+     * @param  array<string, mixed>|null  $composeUsage  from AnswerComposer / stream
+     * @return array<string, mixed>
+     */
     public function finalize(
         AiSession $session,
         array $prepared,
         string $assistantMessage,
         array $suggestedReplies,
         bool $llmUsed,
+        ?array $composeUsage = null,
+        bool $includeCost = false,
     ): array {
         $query = $prepared['query'];
         $matches = $prepared['matches'];
         $stats = $prepared['stats'];
 
+        $parts = [];
+        if (! empty($prepared['intent_usage'])) {
+            $parts[] = $prepared['intent_usage'];
+        }
+        if (! empty($composeUsage)) {
+            $parts[] = $composeUsage;
+        }
+        $turnCost = LlmCost::mergeParts($parts);
+        $turnCost['match_search_usd'] = 0.0;
+        $turnCost['match_search_note'] = 'Catalog search is free (SQL scoring on server)';
+
         $offerIds = array_map(fn ($r) => $r['offer']->id, $matches);
         $session->structured_query = $query;
         $session->last_match_ids = $offerIds;
+
+        // Aggregate session totals (admin meter)
+        $session->tokens_in = (int) ($session->tokens_in ?? 0) + (int) $turnCost['prompt_tokens'];
+        $session->tokens_out = (int) ($session->tokens_out ?? 0) + (int) $turnCost['completion_tokens'];
+        $session->cost_usd = round((float) ($session->cost_usd ?? 0) + (float) $turnCost['cost_usd'], 8);
+        $session->llm_calls = (int) ($session->llm_calls ?? 0) + (int) $turnCost['llm_calls'];
+        $prevSummary = is_array($session->cost_summary) ? $session->cost_summary : LlmCost::emptySession();
+        $session->cost_summary = LlmCost::addSessionTotals($prevSummary, [
+            'prompt_tokens' => $turnCost['prompt_tokens'],
+            'completion_tokens' => $turnCost['completion_tokens'],
+            'total_tokens' => $turnCost['total_tokens'],
+            'cost_usd' => $turnCost['cost_usd'],
+            'llm_calls' => $turnCost['llm_calls'],
+            'messages_with_llm' => $llmUsed || $turnCost['llm_calls'] > 0 ? 1 : 0,
+            'user_messages' => 1,
+        ]);
         $session->save();
 
         AiMessage::create([
@@ -147,10 +181,11 @@ class AiMatchingService
                     'gaps' => $r['gaps'],
                 ], $matches),
                 'llm_used' => $llmUsed,
+                'cost' => $turnCost, // stored; only admin API exposes it
             ],
         ]);
 
-        return [
+        $payload = [
             'session_id' => $session->id,
             'assistant_message' => $assistantMessage,
             'structured_query' => $query,
@@ -170,12 +205,41 @@ class AiMatchingService
                 ],
             ],
         ];
+
+        if ($includeCost) {
+            $payload['cost'] = $turnCost;
+            $payload['session_cost'] = $this->sessionCostPayload($session);
+        }
+
+        return $payload;
     }
 
     /**
      * @return array<string, mixed>
      */
-    public function handleMessage(AiSession $session, string $userMessage): array
+    public function sessionCostPayload(AiSession $session): array
+    {
+        $summary = is_array($session->cost_summary) ? $session->cost_summary : LlmCost::emptySession();
+        $usd = (float) ($session->cost_usd ?? $summary['cost_usd'] ?? 0);
+        $rub = round($usd * (float) config('services.wavespeed.usd_to_rub', 90), 4);
+
+        return [
+            'prompt_tokens' => (int) ($session->tokens_in ?? $summary['prompt_tokens'] ?? 0),
+            'completion_tokens' => (int) ($session->tokens_out ?? $summary['completion_tokens'] ?? 0),
+            'total_tokens' => (int) ($session->tokens_in ?? 0) + (int) ($session->tokens_out ?? 0),
+            'cost_usd' => round($usd, 8),
+            'cost_rub_approx' => $rub,
+            'llm_calls' => (int) ($session->llm_calls ?? $summary['llm_calls'] ?? 0),
+            'user_messages' => (int) ($summary['user_messages'] ?? 0),
+            'messages_with_llm' => (int) ($summary['messages_with_llm'] ?? 0),
+            'rates' => LlmCost::rates(),
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function handleMessage(AiSession $session, string $userMessage, bool $includeCost = false): array
     {
         $prepared = $this->prepare($session, $userMessage);
 
@@ -192,6 +256,8 @@ class AiMatchingService
             $answer['message'],
             $answer['suggested_replies'],
             $answer['llm_used'],
+            $answer['usage'] ?? null,
+            $includeCost,
         );
     }
 

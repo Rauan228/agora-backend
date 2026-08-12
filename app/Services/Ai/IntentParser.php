@@ -15,7 +15,7 @@ class IntentParser
     /**
      * @param  array<string, mixed>|null  $previous
      * @param  list<array{role: string, content: string}>  $history
-     * @return array{query: array<string, mixed>, source: string, model?: string}
+     * @return array{query: array<string, mixed>, source: string, model?: string, usage?: array}
      */
     public function parse(string $userMessage, ?array $previous = null, array $history = []): array
     {
@@ -29,11 +29,16 @@ class IntentParser
                 $merged = $this->mergeQueries($heuristic, $merged);
                 $merged = $this->normalize($merged);
 
-                return [
+                $out = [
                     'query' => $merged,
                     'source' => 'llm+heuristic',
                     'model' => $llmResult['model'] ?? null,
                 ];
+                if (! empty($llmResult['usage'])) {
+                    $out['usage'] = $llmResult['usage'];
+                }
+
+                return $out;
             }
         }
 
@@ -46,7 +51,7 @@ class IntentParser
     /**
      * @param  array<string, mixed>|null  $previous
      * @param  list<array{role: string, content: string}>  $history
-     * @return array{query: array<string, mixed>, model: string}|null
+     * @return array{query: array<string, mixed>, model: string, usage?: array}|null
      */
     private function viaLlm(string $userMessage, ?array $previous, array $history): ?array
     {
@@ -123,10 +128,20 @@ PROMPT;
             return null;
         }
 
-        return [
+        $out = [
             'query' => $parsed,
             'model' => $resp['model'],
         ];
+        if (! empty($resp['usage'])) {
+            $cost = LlmCost::fromUsage($resp['usage'], $resp['model'] ?? null);
+        } else {
+            $promptText = collect($messages)->pluck('content')->implode("\n");
+            $cost = LlmCost::estimateFromText($promptText, $resp['content'], $resp['model'] ?? null);
+        }
+        $cost['label'] = 'intent_parse';
+        $out['usage'] = $cost;
+
+        return $out;
     }
 
     /**

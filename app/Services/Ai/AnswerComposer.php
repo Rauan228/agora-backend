@@ -18,7 +18,7 @@ class AnswerComposer
      * @param  array<string, mixed>  $query
      * @param  list<array{offer: Offer, score: int, reasons: list<string>, gaps?: list<string>, tier?: string}>  $matches
      * @param  array<string, mixed>  $stats
-     * @return array{message: string, suggested_replies: list<string>, llm_used: bool}
+     * @return array{message: string, suggested_replies: list<string>, llm_used: bool, usage?: array}
      */
     public function compose(array $query, array $matches, string $userMessage, array $stats = []): array
     {
@@ -27,11 +27,12 @@ class AnswerComposer
 
         if ($this->llm->enabled() && $matches !== []) {
             $polish = $this->polishWithLlm($template, $query, $matches, $userMessage, $stats);
-            if ($polish) {
+            if ($polish && ! empty($polish['message'])) {
                 return [
-                    'message' => $polish,
+                    'message' => $polish['message'],
                     'suggested_replies' => $suggested,
                     'llm_used' => true,
+                    'usage' => $polish['usage'] ?? null,
                 ];
             }
         }
@@ -268,24 +269,36 @@ class AnswerComposer
      * @param  list<array{offer: Offer, score: int, reasons: list<string>, gaps?: list<string>, tier?: string}>  $matches
      * @param  array<string, mixed>  $stats
      */
+    /**
+     * @return array{message: string, usage?: array}|null
+     */
     private function polishWithLlm(
         string $template,
         array $query,
         array $matches,
         string $userMessage,
         array $stats,
-    ): ?string {
-        $resp = $this->llm->chat(
-            $this->llmMessages($template, $query, $matches, $userMessage, $stats),
-            json: true,
-            temperature: 0.3,
-        );
+    ): ?array {
+        $messages = $this->llmMessages($template, $query, $matches, $userMessage, $stats);
+        $resp = $this->llm->chat($messages, json: true, temperature: 0.3);
         if ($resp === null) {
             return null;
         }
         $parsed = json_decode($resp['content'], true);
         $msg = is_array($parsed) ? ($parsed['message'] ?? null) : null;
+        if (! is_string($msg) || mb_strlen($msg) <= 20) {
+            return null;
+        }
 
-        return is_string($msg) && mb_strlen($msg) > 20 ? $msg : null;
+        $usage = null;
+        if (! empty($resp['usage'])) {
+            $usage = LlmCost::fromUsage($resp['usage'], $resp['model'] ?? null);
+        } else {
+            $promptText = collect($messages)->pluck('content')->implode("\n");
+            $usage = LlmCost::estimateFromText($promptText, $msg, $resp['model'] ?? null);
+        }
+        $usage['label'] = 'answer_compose';
+
+        return ['message' => $msg, 'usage' => $usage];
     }
 }

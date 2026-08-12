@@ -1,6 +1,6 @@
 <?php
 
-namespace App\Http\Controllers\Api;
+namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
 use App\Models\AiSession;
@@ -11,13 +11,12 @@ use App\Services\Ai\AnswerComposer;
 use App\Services\Ai\LlmCost;
 use App\Services\Ai\WaveSpeedClient;
 use Illuminate\Http\Request;
-use Illuminate\Http\Response;
-use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Validation\ValidationException;
 use Symfony\Component\HttpFoundation\StreamedResponse;
 
 /**
- * Public AI matching for product frontend (catalog-grounded).
+ * Admin-only AI matching — same engine as public, but returns cost meter.
+ * Never used by the product frontend.
  */
 class AiSessionController extends Controller
 {
@@ -29,10 +28,8 @@ class AiSessionController extends Controller
 
     public function store(Request $request)
     {
-        $this->throttle($request, 'ai-session-create', 30);
-
         $session = $this->ai->createSession(
-            $request->string('client_key')->toString() ?: null
+            $request->string('client_key')->toString() ?: 'admin'
         );
 
         $stats = $this->catalogStats();
@@ -42,6 +39,10 @@ class AiSessionController extends Controller
             'status' => $session->status,
             'welcome' => $this->welcomeText($stats),
             'catalog' => $stats,
+            'session_cost' => $this->ai->sessionCostPayload($session),
+            'cost_rates' => LlmCost::rates() + [
+                'usd_to_rub' => (float) config('services.wavespeed.usd_to_rub', 90),
+            ],
             'suggested_replies' => [
                 'Гофрокороба для e-com, Москва',
                 'Самосбор 400×300×200 мм, 5000 шт',
@@ -51,10 +52,13 @@ class AiSessionController extends Controller
         ], 201);
     }
 
-    /** Public catalog scale — lets the UI be honest about the search space. */
     public function catalog()
     {
-        return response()->json($this->catalogStats());
+        return response()->json($this->catalogStats() + [
+            'cost_rates' => LlmCost::rates() + [
+                'usd_to_rub' => (float) config('services.wavespeed.usd_to_rub', 90),
+            ],
+        ]);
     }
 
     public function show(string $session)
@@ -67,11 +71,13 @@ class AiSessionController extends Controller
             'structured_query' => $model->structured_query,
             'understood' => $this->ai->understood($model->structured_query ?? []),
             'last_match_ids' => $model->last_match_ids,
+            'session_cost' => $this->ai->sessionCostPayload($model),
             'messages' => $model->messages->map(fn ($m) => [
                 'id' => $m->id,
                 'role' => $m->role,
                 'content' => $m->content,
                 'meta' => $m->meta,
+                'cost' => is_array($m->meta) ? ($m->meta['cost'] ?? null) : null,
                 'created_at' => $m->created_at?->toIso8601String(),
             ]),
         ]);
@@ -79,28 +85,18 @@ class AiSessionController extends Controller
 
     public function message(Request $request, string $session)
     {
-        $this->throttle($request, 'ai-session-msg:'.$session, 40);
-
         $data = $request->validate([
             'message' => ['required', 'string', 'min:1', 'max:4000'],
         ]);
 
         $model = $this->activeSession($session);
-
-        $result = $this->ai->handleMessage($model, $data['message']);
+        $result = $this->ai->handleMessage($model, $data['message'], includeCost: true);
 
         return response()->json($result);
     }
 
-    /**
-     * Server-sent events: matches land immediately, prose streams token by token.
-     *
-     * Frame types: `stage`, `understood`, `results`, `delta`, `done`, `error`.
-     */
     public function stream(Request $request, string $session): StreamedResponse
     {
-        $this->throttle($request, 'ai-session-msg:'.$session, 40);
-
         $data = $request->validate([
             'message' => ['required', 'string', 'min:1', 'max:4000'],
         ]);
@@ -112,7 +108,6 @@ class AiSessionController extends Controller
             $emit = function (string $event, array $payload): void {
                 echo 'event: '.$event."\n";
                 echo 'data: '.json_encode($payload, JSON_UNESCAPED_UNICODE)."\n\n";
-
                 if (ob_get_level() > 0) {
                     @ob_flush();
                 }
@@ -130,9 +125,6 @@ class AiSessionController extends Controller
                 ]);
 
                 $emit('stage', ['stage' => 'match', 'label' => 'Ищу в каталоге']);
-
-                // Matches are deterministic — send them before any prose so the
-                // right-hand panel fills in while the text is still streaming.
                 $partial = $this->ai->finalizePreview($prepared);
                 $emit('results', $partial);
 
@@ -178,11 +170,9 @@ class AiSessionController extends Controller
                         $prepared['matches'],
                         $prepared['stats'],
                     );
-                    // No stream happened (or it failed) — deliver the fallback whole.
                     $emit('delta', ['text' => $text, 'replace' => true]);
                 }
 
-                // Public API: cost is stored server-side but NOT returned.
                 $final = $this->ai->finalize(
                     $model,
                     $prepared,
@@ -190,7 +180,7 @@ class AiSessionController extends Controller
                     $this->composer->repliesFor($prepared['query'], $prepared['matches']),
                     $llmUsed,
                     $composeUsage,
-                    includeCost: false,
+                    includeCost: true,
                 );
 
                 $emit('done', $final);
@@ -203,7 +193,6 @@ class AiSessionController extends Controller
         $response->headers->set('Content-Type', 'text/event-stream; charset=utf-8');
         $response->headers->set('Cache-Control', 'no-cache, no-transform');
         $response->headers->set('Connection', 'keep-alive');
-        // Tell nginx not to buffer — without this the whole stream arrives at once.
         $response->headers->set('X-Accel-Buffering', 'no');
 
         return $response;
@@ -211,8 +200,6 @@ class AiSessionController extends Controller
 
     public function handoff(Request $request, string $session)
     {
-        $this->throttle($request, 'ai-session-handoff:'.$session, 10);
-
         $data = $request->validate([
             'contact' => ['nullable', 'string', 'max:255'],
             'note' => ['nullable', 'string', 'max:2000'],
@@ -224,6 +211,7 @@ class AiSessionController extends Controller
             $data['contact'] ?? null,
             $data['note'] ?? null
         );
+        $result['session_cost'] = $this->ai->sessionCostPayload($model->fresh());
 
         return response()->json($result);
     }
@@ -243,15 +231,12 @@ class AiSessionController extends Controller
      */
     private function catalogStats(): array
     {
-        // Table-qualified: the category aggregate below joins, which makes a
-        // bare `is_active` ambiguous.
         $offers = Offer::query()
             ->where('offers.is_active', true)
             ->whereHas('supplier', fn ($s) => $s->where('suppliers.is_active', true));
 
         $total = $offers->clone()->count();
 
-        // Aggregate in SQL — this endpoint is public and hit on every session.
         $byCategory = $offers->clone()
             ->join('categories', 'categories.id', '=', 'offers.category_id')
             ->groupBy('categories.name')
@@ -266,7 +251,6 @@ class AiSessionController extends Controller
             'active_offers' => $total,
             'active_suppliers' => Supplier::query()->where('is_active', true)->count(),
             'categories' => $byCategory,
-            // Honest signal for the UI: below this the shortlist is inherently thin.
             'is_thin' => $total < 30,
             'llm_enabled' => $this->llm->enabled(),
         ];
@@ -281,47 +265,10 @@ class AiSessionController extends Controller
         $suppliers = (int) ($stats['active_suppliers'] ?? 0);
 
         if ($total === 0) {
-            return 'В каталоге пока нет активных офферов, поэтому подбирать не из чего. '
-                .'Заведите поставщиков и товары в админке — после этого подбор начнёт работать.';
+            return 'В каталоге пока нет активных офферов.';
         }
 
-        $scale = 'Сейчас в каталоге '.$this->plural($total, 'активный оффер', 'активных оффера', 'активных офферов')
-            .' от '.$this->plural($suppliers, 'поставщика', 'поставщиков', 'поставщиков').'.';
-
-        $thin = ($stats['is_thin'] ?? false)
-            ? ' Каталог пока небольшой — если точного совпадения не будет, я покажу ближайшее и скажу, чего не хватает.'
-            : '';
-
-        return 'Опишите задачу по упаковке своими словами: тип, размеры в мм, объём, город. '
-            ."\n\n".$scale.$thin;
-    }
-
-    /** Russian plural: 1 оффер / 2 оффера / 5 офферов. */
-    private function plural(int $n, string $one, string $few, string $many): string
-    {
-        $mod100 = $n % 100;
-        $mod10 = $n % 10;
-
-        if ($mod100 >= 11 && $mod100 <= 14) {
-            return $n.' '.$many;
-        }
-        if ($mod10 === 1) {
-            return $n.' '.$one;
-        }
-        if ($mod10 >= 2 && $mod10 <= 4) {
-            return $n.' '.$few;
-        }
-
-        return $n.' '.$many;
-    }
-
-    private function throttle(Request $request, string $key, int $max): void
-    {
-        $ip = $request->ip() ?? 'unknown';
-        $bucket = 'ai:'.$key.':'.$ip;
-        if (RateLimiter::tooManyAttempts($bucket, $max)) {
-            abort(Response::HTTP_TOO_MANY_REQUESTS, 'Too many AI requests, try later');
-        }
-        RateLimiter::hit($bucket, 60);
+        return 'Admin AI-тест. Каталог: '.$total.' офферов, '.$suppliers.' поставщиков. '
+            .'Стоимость LLM показывается только здесь (не на витрине).';
     }
 }

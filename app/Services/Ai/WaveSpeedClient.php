@@ -19,7 +19,7 @@ class WaveSpeedClient
 
     /**
      * @param  array<int, array{role: string, content: string}>  $messages
-     * @return array{content: string, model: string, raw?: array}|null
+     * @return array{content: string, model: string, usage?: array, raw?: array}|null
      */
     public function chat(array $messages, bool $json = true, float $temperature = 0.2): ?array
     {
@@ -61,11 +61,21 @@ class WaveSpeedClient
                 return null;
             }
 
-            return [
+            $usage = data_get($data, 'usage');
+            $out = [
                 'content' => $content,
                 'model' => $model,
                 'raw' => $data,
             ];
+            if (is_array($usage)) {
+                $out['usage'] = [
+                    'prompt_tokens' => (int) ($usage['prompt_tokens'] ?? 0),
+                    'completion_tokens' => (int) ($usage['completion_tokens'] ?? 0),
+                    'total_tokens' => (int) ($usage['total_tokens'] ?? 0),
+                ];
+            }
+
+            return $out;
         } catch (\Throwable $e) {
             Log::warning('WaveSpeed exception: '.$e->getMessage());
 
@@ -75,13 +85,12 @@ class WaveSpeedClient
 
     /**
      * Streams a completion, invoking $onDelta for every text chunk.
-     * Returns the full accumulated text, or null when the stream failed
-     * before producing anything (caller should fall back to a template).
      *
      * @param  array<int, array{role: string, content: string}>  $messages
      * @param  callable(string): void  $onDelta
+     * @return array{content: string, model: string, usage?: array}|null
      */
-    public function streamChat(array $messages, callable $onDelta, float $temperature = 0.3): ?string
+    public function streamChat(array $messages, callable $onDelta, float $temperature = 0.3): ?array
     {
         if (! $this->enabled()) {
             return null;
@@ -93,6 +102,7 @@ class WaveSpeedClient
 
         $full = '';
         $buffer = '';
+        $usage = null;
 
         try {
             $response = Http::withToken($key)
@@ -106,6 +116,8 @@ class WaveSpeedClient
                     'messages' => $messages,
                     'temperature' => $temperature,
                     'stream' => true,
+                    // OpenAI-compatible: last SSE frame may include usage
+                    'stream_options' => ['include_usage' => true],
                 ]);
 
             if (! $response->successful()) {
@@ -123,7 +135,6 @@ class WaveSpeedClient
                 }
                 $buffer .= $chunk;
 
-                // SSE frames are separated by a blank line.
                 while (($pos = strpos($buffer, "\n")) !== false) {
                     $line = trim(substr($buffer, 0, $pos));
                     $buffer = substr($buffer, $pos + 1);
@@ -145,14 +156,35 @@ class WaveSpeedClient
                         $full .= $delta;
                         $onDelta($delta);
                     }
+                    $u = data_get($json, 'usage');
+                    if (is_array($u)) {
+                        $usage = [
+                            'prompt_tokens' => (int) ($u['prompt_tokens'] ?? 0),
+                            'completion_tokens' => (int) ($u['completion_tokens'] ?? 0),
+                            'total_tokens' => (int) ($u['total_tokens'] ?? 0),
+                        ];
+                    }
                 }
             }
         } catch (\Throwable $e) {
             Log::warning('WaveSpeed stream exception: '.$e->getMessage());
 
-            return $full !== '' ? $full : null;
+            return $full !== '' ? [
+                'content' => $full,
+                'model' => $model,
+                'usage' => $usage,
+            ] : null;
         }
 
-        return $full !== '' ? $full : null;
+        if ($full === '') {
+            return null;
+        }
+
+        $out = ['content' => $full, 'model' => $model];
+        if (is_array($usage)) {
+            $out['usage'] = $usage;
+        }
+
+        return $out;
     }
 }

@@ -45,6 +45,10 @@ return [
         'base_url' => env('WAVESPEED_BASE_URL', 'https://llm.wavespeed.ai/v1'),
         'model' => env('WAVESPEED_MODEL', 'deepseek/deepseek-v4-flash'),
         'timeout' => (int) env('WAVESPEED_TIMEOUT', 45),
+        // Admin cost meter (WaveSpeed public list for deepseek-v4-flash)
+        'price_input_per_mtok' => (float) env('WAVESPEED_PRICE_INPUT_PER_MTOK', 0.17),
+        'price_output_per_mtok' => (float) env('WAVESPEED_PRICE_OUTPUT_PER_MTOK', 0.34),
+        'usd_to_rub' => (float) env('WAVESPEED_USD_TO_RUB', 90),
     ],
 
 ];

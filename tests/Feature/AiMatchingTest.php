@@ -199,4 +199,38 @@ class AiMatchingTest extends TestCase
         $show->assertOk();
         $this->assertGreaterThanOrEqual(2, count($show->json('messages')));
     }
+
+    public function test_public_message_has_no_cost_fields(): void
+    {
+        $sessionId = $this->postJson('/api/ai/sessions')->json('session_id');
+        $msg = $this->postJson("/api/ai/sessions/{$sessionId}/messages", [
+            'message' => 'гофрокороб 400x300x200 Москва',
+        ])->assertOk();
+
+        $this->assertArrayNotHasKey('cost', $msg->json());
+        $this->assertArrayNotHasKey('session_cost', $msg->json());
+    }
+
+    public function test_admin_message_includes_cost_meter(): void
+    {
+        $user = \App\Models\User::factory()->create([
+            'email' => 'ai-cost@agora.local',
+            'password' => bcrypt('password'),
+        ]);
+        $token = $user->createToken('test')->plainTextToken;
+
+        $create = $this->withToken($token)->postJson('/api/admin/ai/sessions');
+        $create->assertCreated();
+        $this->assertArrayHasKey('session_cost', $create->json());
+
+        $sessionId = $create->json('session_id');
+        $msg = $this->withToken($token)->postJson("/api/admin/ai/sessions/{$sessionId}/messages", [
+            'message' => 'гофрокороб 400x300x200 Москва',
+        ])->assertOk();
+
+        $this->assertArrayHasKey('cost', $msg->json());
+        $this->assertArrayHasKey('session_cost', $msg->json());
+        $this->assertArrayHasKey('match_search_usd', $msg->json('cost'));
+        $this->assertSame(0, $msg->json('cost.match_search_usd'));
+    }
 }

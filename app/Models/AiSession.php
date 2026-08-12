@@ -23,6 +23,11 @@ class AiSession extends Model
         'handoff_contact',
         'handoff_note',
         'handed_off_at',
+        'tokens_in',
+        'tokens_out',
+        'cost_usd',
+        'llm_calls',
+        'cost_summary',
     ];
 
     protected function casts(): array
@@ -31,6 +36,8 @@ class AiSession extends Model
             'structured_query' => 'array',
             'last_match_ids' => 'array',
             'handed_off_at' => 'datetime',
+            'cost_summary' => 'array',
+            'cost_usd' => 'float',
         ];
     }
 

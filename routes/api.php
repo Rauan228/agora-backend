@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\Admin\AiSessionController as AdminAiSessionController;
 use App\Http\Controllers\Api\Admin\AuthController as AdminAuthController;
 use App\Http\Controllers\Api\Admin\MetaController as AdminMetaController;
 use App\Http\Controllers\Api\Admin\OfferController as AdminOfferController;
@@ -74,5 +75,15 @@ Route::prefix('admin')->group(function () {
         Route::put('/offers/{offer}', [AdminOfferController::class, 'update']);
         Route::patch('/offers/{offer}', [AdminOfferController::class, 'update']);
         Route::delete('/offers/{offer}', [AdminOfferController::class, 'destroy']);
+
+        // AI matching + cost meter (admin only — not for public storefront)
+        Route::prefix('ai')->group(function () {
+            Route::get('/catalog', [AdminAiSessionController::class, 'catalog']);
+            Route::post('/sessions', [AdminAiSessionController::class, 'store']);
+            Route::get('/sessions/{session}', [AdminAiSessionController::class, 'show']);
+            Route::post('/sessions/{session}/messages', [AdminAiSessionController::class, 'message']);
+            Route::post('/sessions/{session}/stream', [AdminAiSessionController::class, 'stream']);
+            Route::post('/sessions/{session}/handoff', [AdminAiSessionController::class, 'handoff']);
+        });
     });
 });
