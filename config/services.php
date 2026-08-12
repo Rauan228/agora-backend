@@ -35,4 +35,17 @@ return [
         ],
     ],
 
+    /*
+    | WaveSpeed OpenAI-compatible LLM (AI matching)
+    | https://llm.wavespeed.ai/v1
+    */
+    'wavespeed' => [
+        'enabled' => env('WAVESPEED_ENABLED', true),
+        'key' => env('WAVESPEED_API_KEY'),
+        'base_url' => env('WAVESPEED_BASE_URL', 'https://llm.wavespeed.ai/v1'),
+        'model' => env('WAVESPEED_MODEL', 'deepseek/deepseek-v4-flash'),
+        'timeout' => (int) env('WAVESPEED_TIMEOUT', 45),
+    ],
+
 ];
+

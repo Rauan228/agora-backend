@@ -4,6 +4,7 @@ use App\Http\Controllers\Api\Admin\AuthController as AdminAuthController;
 use App\Http\Controllers\Api\Admin\MetaController as AdminMetaController;
 use App\Http\Controllers\Api\Admin\OfferController as AdminOfferController;
 use App\Http\Controllers\Api\Admin\SupplierController as AdminSupplierController;
+use App\Http\Controllers\Api\AiSessionController;
 use App\Http\Controllers\Api\CategoryController;
 use App\Http\Controllers\Api\OfferController;
 use App\Http\Controllers\Api\SupplierController;
@@ -21,6 +22,19 @@ Route::get('/suppliers/{supplier}', [SupplierController::class, 'show']);
 
 Route::get('/offers', [OfferController::class, 'index']);
 Route::get('/offers/{offer}', [OfferController::class, 'show']);
+
+/*
+|--------------------------------------------------------------------------
+| Public AI matching (catalog-grounded chat)
+|--------------------------------------------------------------------------
+*/
+Route::prefix('ai')->group(function () {
+    Route::post('/sessions', [AiSessionController::class, 'store']);
+    Route::get('/sessions/{session}', [AiSessionController::class, 'show']);
+    Route::post('/sessions/{session}/messages', [AiSessionController::class, 'message']);
+    Route::post('/sessions/{session}/handoff', [AiSessionController::class, 'handoff']);
+});
+
 
 
 /*

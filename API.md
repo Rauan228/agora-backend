@@ -64,7 +64,13 @@ NEXT_PUBLIC_API_URL=https://agora.178.88.115.213.sslip.io/api
 | GET | `/api/suppliers/{id}` | Карточка поставщика |
 | GET | `/api/offers` | Каталог офферов (SKU) — **основной для сравнения** |
 | GET | `/api/offers/{id}` | Карточка оффера |
+| POST | `/api/ai/sessions` | AI-подбор: создать сессию чата |
+| POST | `/api/ai/sessions/{id}/messages` | AI-подбор: сообщение → shortlist офферов |
+| GET | `/api/ai/sessions/{id}` | AI-подбор: история сессии |
+| POST | `/api/ai/sessions/{id}/handoff` | AI-подбор: передать менеджеру |
 | GET | `/files/{path}` | Отдача файла (лого / фото) — **не** вызывается руками, URL уже в JSON |
+
+Полное описание AI: [`docs/AI_MATCHING.md`](docs/AI_MATCHING.md).
 
 ---
 
