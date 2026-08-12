@@ -2,6 +2,7 @@
 
 use App\Http\Controllers\Api\Admin\AiSessionController as AdminAiSessionController;
 use App\Http\Controllers\Api\Admin\AuthController as AdminAuthController;
+use App\Http\Controllers\Api\Admin\DashboardController;
 use App\Http\Controllers\Api\Admin\MetaController as AdminMetaController;
 use App\Http\Controllers\Api\Admin\OfferController as AdminOfferController;
 use App\Http\Controllers\Api\Admin\SupplierController as AdminSupplierController;
@@ -52,6 +53,8 @@ Route::prefix('admin')->group(function () {
     Route::middleware('auth:sanctum')->group(function () {
         Route::get('/me', [AdminAuthController::class, 'me']);
         Route::post('/logout', [AdminAuthController::class, 'logout']);
+        Route::get('/dashboard', [DashboardController::class, 'show']);
+        Route::get('/ai/ledger', [DashboardController::class, 'sessions']);
 
         // Справочники / схемы форм
         Route::get('/meta/dictionaries', [AdminMetaController::class, 'dictionaries']);
