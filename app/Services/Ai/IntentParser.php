@@ -99,7 +99,11 @@ class IntentParser
 - Если объём «5000 в месяц» → qty
 - missing_slots: что критично спросить (макс 2)
 - clarifying_question: один короткий вопрос на русском, если confidence < 0.55 или есть missing_slots
-- Учитывай previous_query и дополняй, не затирай известное null-ами
+- previous_query — это уже согласованный контекст диалога. Дополняй его новыми деталями
+  из user_message и НЕ повторяй в ответе то, что не менялось (пропущенные поля сохранятся сами).
+- Если user_message явно противоречит previous_query (другой размер, другой цвет, другой тип) —
+  верни новое значение: свежая реплика покупателя всегда важнее старой.
+- previous_query уже очищен от полей, несовместимых с новой категорией. Не восстанавливай их.
 PROMPT;
 
         $messages = [
@@ -144,6 +148,50 @@ PROMPT;
         return $out;
     }
 
+    /** Keyword → category slug, used both for parsing and topic-switch detection. */
+    private const CATEGORY_KEYWORDS = [
+        'corrugated-boxes' => ['гофрокороб', 'гофрокороба', 'коробк', 'гофроящик', 'fefco', 'самосбор', 'четырёхклапан', 'четырехклапан', 'гофротара'],
+        'corrugated-sheet' => ['гофролист', 'листовой гофро', 'гофрокартон лист', 'лист гофро'],
+        'stretch-film' => ['стрейч', 'стретч', 'stretch'],
+        'shrink-film' => ['термоусад', 'shrink'],
+        'bubble-wrap' => ['пузырчат', 'воздушно-пузыр', 'впп'],
+        'packing-tape' => ['скотч', 'клейкая лента'],
+        'strapping-tape' => ['стреппинг', 'стреппинг-лент', 'пп лента'],
+        'courier-bags' => ['курьерск', 'сейф-пакет', 'пакет курьер'],
+        'zip-lock' => ['zip', 'зип', 'zip-lock', 'зип-лок'],
+        'fillers' => ['наполнител', 'воздушн подуш'],
+        'thermal-labels' => ['термоэтикет', 'этикетк'],
+        'pallets' => ['паллет', 'поддон'],
+        'foam-pe' => ['вспенен', 'пенополиэтилен', 'ппэ'],
+    ];
+
+    /**
+     * Categories named in *this* message only — no inheritance from the running
+     * query. Topic-switch detection depends on that isolation.
+     *
+     * @return list<string>
+     */
+    public function categoriesFor(string $message): array
+    {
+        $t = mb_strtolower($message);
+        $slugs = [];
+
+        foreach (self::CATEGORY_KEYWORDS as $slug => $words) {
+            foreach ($words as $w) {
+                if (str_contains($t, $w)) {
+                    $slugs[] = $slug;
+                    break;
+                }
+            }
+        }
+
+        if ($slugs === [] && preg_match('/упаков|тара|короб/u', $t)) {
+            $slugs[] = 'corrugated-boxes';
+        }
+
+        return array_values(array_unique($slugs));
+    }
+
     /**
      * @param  array<string, mixed>|null  $previous
      * @return array<string, mixed>
@@ -154,33 +202,7 @@ PROMPT;
         $q = $previous ? $this->normalize($previous) : $this->emptyQuery();
 
         // categories
-        $slugs = $q['category_slugs'] ?? [];
-        $map = [
-            'corrugated-boxes' => ['гофрокороб', 'гофрокороба', 'коробк', 'гофроящик', 'fefco', 'самосбор', 'четырёхклапан', 'четырехклапан', 'гофротара'],
-            'corrugated-sheet' => ['гофролист', 'листовой гофро', 'гофрокартон лист', 'лист гофро'],
-            'stretch-film' => ['стрейч', 'стретч', 'stretch'],
-            'shrink-film' => ['термоусад', 'shrink'],
-            'bubble-wrap' => ['пузырчат', 'воздушно-пузыр', 'ВПП'],
-            'packing-tape' => ['скотч', 'клейкая лента'],
-            'strapping-tape' => ['стреппинг', 'стреппинг-лент', 'пп лента'],
-            'courier-bags' => ['курьерск', 'сейф-пакет', 'пакет курьер'],
-            'zip-lock' => ['zip', 'зип', 'zip-lock', 'зип-лок'],
-            'fillers' => ['наполнител', 'воздушн подуш'],
-            'thermal-labels' => ['термоэтикет', 'этикетк'],
-            'pallets' => ['паллет', 'поддон'],
-            'foam-pe' => ['вспенен', 'пенополиэтилен', 'ппэ'],
-        ];
-        foreach ($map as $slug => $words) {
-            foreach ($words as $w) {
-                if (str_contains($t, mb_strtolower($w))) {
-                    $slugs[] = $slug;
-                    break;
-                }
-            }
-        }
-        if ($slugs === [] && preg_match('/упаков|тара|короб/u', $t)) {
-            $slugs[] = 'corrugated-boxes';
-        }
+        $slugs = array_merge($q['category_slugs'] ?? [], $this->categoriesFor($message));
         $q['category_slugs'] = array_values(array_unique($slugs));
 
         // sizes 400x300x200 or 400×300×200
@@ -232,11 +254,26 @@ PROMPT;
             $q['branding_needed'] = true;
         }
 
-        // qty
-        if (preg_match('/(\d[\d\s]{0,8})\s*(шт|штук|коробок|короба)/u', $t, $m)) {
+        // qty — explicit unit, «в месяц», «5 тыс», or a bare round number
+        if (preg_match('/(\d[\d\s]{0,8})\s*(шт|штук|коробок|короба|рулон|лист|паллет)/u', $t, $m)) {
             $q['qty'] = (int) preg_replace('/\s+/', '', $m[1]);
         } elseif (preg_match('/(\d[\d\s]{2,8})\s*(в\s*месяц|\/мес|мес)/u', $t, $m)) {
             $q['qty'] = (int) preg_replace('/\s+/', '', $m[1]);
+        } elseif (preg_match('/(\d{1,4})\s*(тыс|к)\b/u', $t, $m)) {
+            $q['qty'] = ((int) $m[1]) * 1000;
+        } elseif (preg_match('/(?:объ[её]м|тираж|нужно|партия|около)\D{0,12}(\d[\d\s]{2,8})/u', $t, $m)) {
+            $q['qty'] = (int) preg_replace('/\s+/', '', $m[1]);
+        } else {
+            // A standalone 3-6 digit number that isn't part of a size or a grade
+            // is almost always the quantity («короба 400x300x200 Москва 5000»).
+            $withoutSizes = preg_replace('/\d{2,4}\s*[xх×*]\s*\d{2,4}(\s*[xх×*]\s*\d{2,4})?/u', ' ', $t) ?? $t;
+            $withoutSizes = preg_replace('/[тпtp]\s*-?\s*\d{2}/ui', ' ', $withoutSizes) ?? $withoutSizes;
+            if (preg_match('/(?<![\d,.])(\d{3,7})(?![\d,.]*\s*(мм|мк|м2|м3|%))/u', $withoutSizes, $m)) {
+                $n = (int) $m[1];
+                if ($n >= 100) {
+                    $q['qty'] = $n;
+                }
+            }
         }
 
         // geo
@@ -373,7 +410,42 @@ PROMPT;
             $out['size_tolerance_pct'] = 10;
         }
 
+        // Recompute against the *merged* query: slots filled in an earlier turn
+        // must not be asked for again.
+        $out['missing_slots'] = $this->missingSlotsFor($out);
+        if ($out['missing_slots'] === []) {
+            $out['clarifying_question'] = null;
+        }
+
         return $out;
+    }
+
+    /**
+     * What is still genuinely unknown, given everything gathered so far.
+     *
+     * @param  array<string, mixed>  $q
+     * @return list<string>
+     */
+    public function missingSlotsFor(array $q): array
+    {
+        $slugs = is_array($q['category_slugs'] ?? null) ? $q['category_slugs'] : [];
+        $missing = [];
+
+        // Dimensions only matter for made-to-size goods.
+        $needsDims = $slugs === []
+            || array_intersect($slugs, ['corrugated-boxes', 'corrugated-sheet']) !== [];
+
+        if ($needsDims && (empty($q['length_mm']) || empty($q['width_mm']))) {
+            $missing[] = 'length_mm';
+        }
+        if (empty($q['qty'])) {
+            $missing[] = 'qty';
+        }
+        if ($slugs === []) {
+            $missing[] = 'category';
+        }
+
+        return array_slice(array_values(array_unique($missing)), 0, 2);
     }
 
     /**

@@ -14,6 +14,7 @@ class AiMatchingService
         private IntentParser $intentParser,
         private OfferMatcher $matcher,
         private AnswerComposer $composer,
+        private TurnInterpreter $interpreter,
     ) {}
 
     public function createSession(?string $clientKey = null): AiSession
@@ -59,15 +60,60 @@ class AiMatchingService
             ->map(fn (AiMessage $m) => ['role' => $m->role, 'content' => $m->content])
             ->all();
 
-        $parsed = $this->intentParser->parse(
+        $previous = $session->structured_query ?? $this->intentParser->emptyQuery();
+        $lastIds = $session->last_match_ids ?? [];
+        $hadPriorSearch = $lastIds !== [] || $this->interpreter->hasAnyConstraint($previous);
+
+        // Decide what this turn means for the conversation *before* parsing, so
+        // a topic switch can clear stale constraints instead of inheriting them.
+        $turn = $this->interpreter->interpret(
             $userMessage,
-            $session->structured_query,
-            $history
+            $previous,
+            $hadPriorSearch,
+            $this->intentParser,
         );
+
+        $baseQuery = $turn['base_query'];
+
+        // Small talk / meta: answer conversationally, keep the running query,
+        // and don't spend an LLM call or a match on it.
+        if (! $turn['should_match']) {
+            return [
+                'query' => $this->intentParser->normalize($baseQuery),
+                'intent_source' => 'conversation',
+                'matches' => [],
+                'stats' => $this->matcher->emptyStats(),
+                'sort_mode' => null,
+                'intent_usage' => null,
+                'turn_kind' => $turn['kind'],
+                'added_fields' => [],
+                'dropped_fields' => $turn['dropped'],
+                'switched_from' => $turn['switched_from'],
+                'catalog' => $this->catalogSnapshot(),
+                'should_match' => false,
+                'history' => $history,
+                'previous_result_count' => count($lastIds),
+            ];
+        }
+
+        $parsed = $this->intentParser->parse($userMessage, $baseQuery, $history);
         $query = $parsed['query'];
 
-        $sortMode = $this->sortIntent($userMessage);
-        $lastIds = $session->last_match_ids ?? [];
+        // A drop must survive parsing: the LLM sees the old value in history and
+        // happily re-adds it, so re-apply the removals afterwards.
+        foreach ($turn['dropped'] as $field) {
+            $query[$field] = null;
+        }
+        foreach ($turn['switched_from'] as $field) {
+            if (empty($this->intentParser->heuristic($userMessage)[$field] ?? null)) {
+                $query[$field] = null;
+            }
+        }
+        $query = $this->intentParser->normalize($query);
+
+        $sortMode = $turn['kind'] === TurnInterpreter::KIND_SORT
+            ? $this->sortIntent($userMessage)
+            : null;
 
         if ($sortMode !== null && $lastIds !== []) {
             // Re-rank what the buyer is already looking at, keeping real scores.
@@ -83,7 +129,82 @@ class AiMatchingService
             'stats' => $result['stats'],
             'sort_mode' => $sortMode,
             'intent_usage' => $parsed['usage'] ?? null,
+            'turn_kind' => $turn['kind'],
+            'added_fields' => $this->interpreter->addedFields($previous, $query),
+            'dropped_fields' => $turn['dropped'],
+            'switched_from' => $turn['switched_from'],
+            'catalog' => $this->catalogSnapshot(),
+            'should_match' => true,
+            'history' => $history,
+            'previous_result_count' => count($lastIds),
         ];
+    }
+
+    /**
+     * Applies a manual edit from the UI (removing one constraint chip) and
+     * re-runs the match without going through the LLM at all.
+     *
+     * @param  list<string>  $fields
+     * @return array<string, mixed>
+     */
+    public function applyEdit(AiSession $session, array $fields): array
+    {
+        $query = $session->structured_query ?? $this->intentParser->emptyQuery();
+        $previous = $query;
+
+        $cleared = [];
+        foreach ($fields as $field) {
+            if (! array_key_exists($field, $this->intentParser->emptyQuery())) {
+                continue;
+            }
+            if (! empty($query[$field]) || $query[$field] === true) {
+                $cleared[] = $field;
+            }
+            $query[$field] = $field === 'category_slugs' || $field === 'keywords' ? [] : null;
+        }
+
+        // Dropping the size means dropping all three dimensions together.
+        if (in_array('dimensions', $fields, true)) {
+            foreach (['length_mm', 'width_mm', 'height_mm'] as $d) {
+                if (! empty($query[$d])) {
+                    $cleared[] = $d;
+                }
+                $query[$d] = null;
+            }
+        }
+
+        $query = $this->intentParser->normalize($query);
+        $result = $this->matcher->search($query, limit: 8);
+
+        return [
+            'query' => $query,
+            'intent_source' => 'manual_edit',
+            'matches' => $result['matches'],
+            'stats' => $result['stats'],
+            'sort_mode' => null,
+            'intent_usage' => null,
+            'turn_kind' => TurnInterpreter::KIND_REFINE,
+            'added_fields' => [],
+            'dropped_fields' => array_values(array_unique($cleared)),
+            'switched_from' => [],
+            'catalog' => $this->catalogSnapshot(),
+            'previous_query' => $previous,
+        ];
+    }
+
+    /**
+     * Catalog scale, so the composer can be honest without a second query.
+     *
+     * @return array<string, mixed>
+     */
+    private function catalogSnapshot(): array
+    {
+        $total = Offer::query()
+            ->where('offers.is_active', true)
+            ->whereHas('supplier', fn ($s) => $s->where('suppliers.is_active', true))
+            ->count();
+
+        return ['active_offers' => $total, 'is_thin' => $total < 30];
     }
 
     /**
@@ -105,6 +226,15 @@ class AiMatchingService
             'offers' => $this->serializeMatches($matches),
             'suppliers' => $this->uniqueSuppliers($matches),
             'comparison' => $this->buildComparison($matches),
+            // The UI needs this early: a conversational turn must not blank the
+            // results panel while the reply is still streaming.
+            'turn' => [
+                'kind' => $prepared['turn_kind'] ?? null,
+                'added_fields' => $prepared['added_fields'] ?? [],
+                'dropped_fields' => $prepared['dropped_fields'] ?? [],
+                'switched_from' => $prepared['switched_from'] ?? [],
+                'searched' => ($prepared['should_match'] ?? true) === true,
+            ],
         ];
     }
 
@@ -196,6 +326,13 @@ class AiMatchingService
             'suppliers' => $this->uniqueSuppliers($matches),
             'comparison' => $this->buildComparison($matches),
             'suggested_replies' => $suggestedReplies,
+            'turn' => [
+                'kind' => $prepared['turn_kind'] ?? null,
+                'added_fields' => $prepared['added_fields'] ?? [],
+                'dropped_fields' => $prepared['dropped_fields'] ?? [],
+                'switched_from' => $prepared['switched_from'] ?? [],
+                'searched' => ($prepared['should_match'] ?? true) === true,
+            ],
             'cta' => [
                 'type' => 'request_quote',
                 'label' => 'Передать менеджеру',
@@ -248,6 +385,7 @@ class AiMatchingService
             $prepared['matches'],
             $userMessage,
             $prepared['stats'],
+            $prepared,
         );
 
         return $this->finalize(
@@ -258,6 +396,42 @@ class AiMatchingService
             $answer['llm_used'],
             $answer['usage'] ?? null,
             $includeCost,
+        );
+    }
+
+    /**
+     * Constraint removed from the UI: re-match deterministically and record the
+     * turn in the transcript so the conversation stays coherent.
+     *
+     * @param  list<string>  $remove
+     * @return array<string, mixed>
+     */
+    public function refine(AiSession $session, array $remove, bool $includeCost = false): array
+    {
+        $prepared = $this->applyEdit($session, $remove);
+
+        $label = $this->composer->describeRemoval($prepared['dropped_fields']);
+        AiMessage::create([
+            'ai_session_id' => $session->id,
+            'role' => 'user',
+            'content' => $label !== null ? "Убрать из запроса: {$label}" : 'Изменить фильтры',
+        ]);
+
+        $message = $this->composer->template(
+            $prepared['query'],
+            $prepared['matches'],
+            $prepared['stats'],
+            $prepared,
+        );
+
+        return $this->finalize(
+            $session,
+            $prepared,
+            $message,
+            $this->composer->repliesFor($prepared['query'], $prepared['matches'], $prepared),
+            llmUsed: false,
+            composeUsage: null,
+            includeCost: $includeCost,
         );
     }
 
@@ -300,8 +474,11 @@ class AiMatchingService
     /**
      * Human-readable summary of what the AI extracted — the trust anchor.
      *
+     * Each entry carries `fields`: the query keys to clear when the buyer
+     * removes that chip in the UI, so a tag is directly actionable.
+     *
      * @param  array<string, mixed>  $query
-     * @return list<array{label: string, value: string, key: string}>
+     * @return list<array{key: string, label: string, value: string, fields: list<string>, removable: bool}>
      */
     public function understood(array $query): array
     {
@@ -317,11 +494,21 @@ class AiMatchingService
                 'key' => 'category',
                 'label' => 'Категория',
                 'value' => implode(', ', $names !== [] ? $names : $slugs),
+                'fields' => ['category_slugs'],
+                // Dropping the category turns the search into "anything" — allow
+                // it, but it is rarely what the buyer wants.
+                'removable' => true,
             ];
         }
 
         if (! empty($query['box_type'])) {
-            $out[] = ['key' => 'box_type', 'label' => 'Тип', 'value' => (string) $query['box_type']];
+            $out[] = [
+                'key' => 'box_type',
+                'label' => 'Тип',
+                'value' => (string) $query['box_type'],
+                'fields' => ['box_type'],
+                'removable' => true,
+            ];
         }
 
         $l = $query['length_mm'] ?? null;
@@ -334,36 +521,82 @@ class AiMatchingService
                 'label' => 'Размер',
                 'value' => implode('×', $dims).' мм'
                     .' (±'.(int) ($query['size_tolerance_pct'] ?? 10).'%)',
+                'fields' => ['length_mm', 'width_mm', 'height_mm'],
+                'removable' => true,
             ];
         }
 
         if (! empty($query['qty'])) {
-            $out[] = ['key' => 'qty', 'label' => 'Объём', 'value' => number_format((int) $query['qty'], 0, '.', ' ').' шт'];
+            $out[] = [
+                'key' => 'qty',
+                'label' => 'Объём',
+                'value' => number_format((int) $query['qty'], 0, '.', ' ').' шт',
+                'fields' => ['qty'],
+                'removable' => true,
+            ];
         }
         if (! empty($query['board_grade'])) {
-            $out[] = ['key' => 'board_grade', 'label' => 'Марка', 'value' => (string) $query['board_grade']];
+            $out[] = [
+                'key' => 'board_grade',
+                'label' => 'Марка',
+                'value' => (string) $query['board_grade'],
+                'fields' => ['board_grade'],
+                'removable' => true,
+            ];
         }
         if (! empty($query['flute_profile'])) {
-            $out[] = ['key' => 'flute_profile', 'label' => 'Профиль', 'value' => (string) $query['flute_profile']];
+            $out[] = [
+                'key' => 'flute_profile',
+                'label' => 'Профиль',
+                'value' => (string) $query['flute_profile'],
+                'fields' => ['flute_profile'],
+                'removable' => true,
+            ];
         }
         if (! empty($query['liner_color'])) {
-            $out[] = ['key' => 'liner_color', 'label' => 'Цвет', 'value' => (string) $query['liner_color']];
+            $out[] = [
+                'key' => 'liner_color',
+                'label' => 'Цвет',
+                'value' => (string) $query['liner_color'],
+                'fields' => ['liner_color'],
+                'removable' => true,
+            ];
         }
         if (($query['print_needed'] ?? null) === true) {
-            $out[] = ['key' => 'print_needed', 'label' => 'Печать', 'value' => 'нужна'];
+            $out[] = [
+                'key' => 'print_needed',
+                'label' => 'Печать',
+                'value' => 'нужна',
+                'fields' => ['print_needed', 'branding_needed'],
+                'removable' => true,
+            ];
         }
         if (! empty($query['city']) || ($query['delivery_moscow'] ?? null) === true) {
             $out[] = [
                 'key' => 'city',
                 'label' => 'Гео',
                 'value' => (string) ($query['city'] ?? 'Москва / МО'),
+                'fields' => ['city', 'delivery_moscow'],
+                'removable' => true,
             ];
         }
         if (! empty($query['lead_time_days_max'])) {
-            $out[] = ['key' => 'lead_time', 'label' => 'Срок', 'value' => 'до '.(int) $query['lead_time_days_max'].' дн.'];
+            $out[] = [
+                'key' => 'lead_time',
+                'label' => 'Срок',
+                'value' => 'до '.(int) $query['lead_time_days_max'].' дн.',
+                'fields' => ['lead_time_days_max'],
+                'removable' => true,
+            ];
         }
         if (! empty($query['moq_max'])) {
-            $out[] = ['key' => 'moq_max', 'label' => 'MOQ не выше', 'value' => (string) (int) $query['moq_max']];
+            $out[] = [
+                'key' => 'moq_max',
+                'label' => 'MOQ не выше',
+                'value' => (string) (int) $query['moq_max'],
+                'fields' => ['moq_max'],
+                'removable' => true,
+            ];
         }
 
         return $out;

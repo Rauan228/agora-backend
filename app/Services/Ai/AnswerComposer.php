@@ -20,13 +20,22 @@ class AnswerComposer
      * @param  array<string, mixed>  $stats
      * @return array{message: string, suggested_replies: list<string>, llm_used: bool, usage?: array}
      */
-    public function compose(array $query, array $matches, string $userMessage, array $stats = []): array
-    {
-        $template = $this->template($query, $matches, $stats);
-        $suggested = $this->suggestedReplies($query, $matches);
+    public function compose(
+        array $query,
+        array $matches,
+        string $userMessage,
+        array $stats = [],
+        array $turn = [],
+    ): array {
+        $template = $this->template($query, $matches, $stats, $turn);
+        $suggested = $this->suggestedReplies($query, $matches, $turn);
 
-        if ($this->llm->enabled() && $matches !== []) {
-            $polish = $this->polishWithLlm($template, $query, $matches, $userMessage, $stats);
+        // Conversational turns (greeting, meta, reset) still get an LLM voice —
+        // that's exactly where a canned template feels robotic.
+        $conversational = ($turn['should_match'] ?? true) === false;
+
+        if ($this->llm->enabled() && ($matches !== [] || $conversational)) {
+            $polish = $this->polishWithLlm($template, $query, $matches, $userMessage, $stats, $turn);
             if ($polish && ! empty($polish['message'])) {
                 return [
                     'message' => $polish['message'],
@@ -53,18 +62,26 @@ class AnswerComposer
      * @param  array<string, mixed>  $stats
      * @return list<array{role: string, content: string}>|null
      */
-    public function streamMessages(array $query, array $matches, string $userMessage, array $stats = []): ?array
-    {
-        if (! $this->llm->enabled() || $matches === []) {
+    public function streamMessages(
+        array $query,
+        array $matches,
+        string $userMessage,
+        array $stats = [],
+        array $turn = [],
+    ): ?array {
+        $conversational = ($turn['should_match'] ?? true) === false;
+
+        if (! $this->llm->enabled() || ($matches === [] && ! $conversational)) {
             return null;
         }
 
         return $this->llmMessages(
-            $this->template($query, $matches, $stats),
+            $this->template($query, $matches, $stats, $turn),
             $query,
             $matches,
             $userMessage,
             $stats,
+            $turn,
             json: false,
         );
     }
@@ -74,10 +91,21 @@ class AnswerComposer
      * @param  list<array{offer: Offer, score: int, reasons: list<string>, gaps?: list<string>, tier?: string}>  $matches
      * @param  array<string, mixed>  $stats
      */
-    public function template(array $query, array $matches, array $stats = []): string
+    public function template(array $query, array $matches, array $stats = [], array $turn = []): string
     {
         $parts = [];
         $total = (int) ($stats['active_offers_total'] ?? 0);
+
+        // ---- conversational turns: no search happened ------------------------
+        if (($turn['should_match'] ?? true) === false) {
+            return $this->conversationalTemplate($query, $stats, $turn);
+        }
+
+        // ---- acknowledge what changed, before the results --------------------
+        $ack = $this->acknowledgement($query, $turn);
+        if ($ack !== null) {
+            $parts[] = $ack;
+        }
 
         if ($matches === []) {
             $parts[] = $total === 0
@@ -127,13 +155,254 @@ class AnswerComposer
                 .'), поэтому выбор ограничен. Менеджер может добрать поставщиков под задачу._';
         }
 
+        // Ask for at most one thing, and only when it is genuinely unknown.
         if (! empty($query['missing_slots'])) {
             $parts[] = 'Чтобы сузить выбор: '.$this->slotHint((string) $query['missing_slots'][0]);
+        } elseif (count($matches) > 1) {
+            $parts[] = 'Могу сравнить варианты, отсортировать по цене или передать запрос менеджеру с готовым брифом.';
         } else {
-            $parts[] = 'Могу сравнить топ-3, отсортировать по цене или передать запрос менеджеру с готовым брифом.';
+            $parts[] = 'Если вариант подходит — передам запрос менеджеру с готовым брифом.';
         }
 
         return implode("\n\n", $parts);
+    }
+
+    /** Human labels for query fields, used in acknowledgements. */
+    private const FIELD_LABELS = [
+        'category_slugs' => 'категорию',
+        'city' => 'город',
+        'delivery_moscow' => 'доставку',
+        'box_type' => 'тип короба',
+        'length_mm' => 'длину',
+        'width_mm' => 'ширину',
+        'height_mm' => 'высоту',
+        'board_grade' => 'марку картона',
+        'flute_profile' => 'профиль гофры',
+        'liner_color' => 'цвет',
+        'print_needed' => 'печать',
+        'branding_needed' => 'брендирование',
+        'qty' => 'объём',
+        'moq_max' => 'ограничение по MOQ',
+        'lead_time_days_max' => 'срок',
+    ];
+
+    /**
+     * Reply for a turn where nothing was searched: greeting, meta question, or
+     * an explicit reset. This is where the assistant stops sounding like a
+     * search box.
+     *
+     * @param  array<string, mixed>  $query
+     * @param  array<string, mixed>  $stats
+     * @param  array<string, mixed>  $turn
+     */
+    private function conversationalTemplate(array $query, array $stats, array $turn): string
+    {
+        $kind = $turn['turn_kind'] ?? TurnInterpreter::KIND_SMALL_TALK;
+        $total = (int) ($stats['active_offers_total'] ?? 0);
+
+        if ($kind === TurnInterpreter::KIND_RESET) {
+            return "Хорошо, начинаем с чистого листа — прежние параметры сбросил.\n\n"
+                .'Опишите новую задачу: что упаковываем, размеры в мм, объём и город.';
+        }
+
+        if ($kind === TurnInterpreter::KIND_META) {
+            $lines = [
+                'Я подбираю упаковку из каталога Agora: понимаю задачу словами, ищу по офферам поставщиков и объясняю, почему подходит именно это.',
+                'Сейчас в каталоге '.$this->plural($total, 'активный оффер', 'активных оффера', 'активных офферов')
+                    .'. Искать по всему рынку я не умею — только по заведённым товарам.',
+                'Скажите задачу как коллеге: например «короба 400×300×200 под маркетплейсы, 5000 шт в месяц, Москва». Уточнения можно дописывать по ходу — я помню контекст.',
+            ];
+
+            return implode("\n\n", $lines);
+        }
+
+        // Greeting — pick up where we left off if there is a running query.
+        $running = $this->runningSummary($query);
+        if ($running !== null) {
+            return "Здравствуйте! Мы остановились на: {$running}.\n\n"
+                .'Продолжаем с этими параметрами или уточним что-то?';
+        }
+
+        return "Здравствуйте! Помогу подобрать упаковку под задачу.\n\n"
+            .'Расскажите, что нужно: тип упаковки, размеры в мм, примерный объём и город доставки. '
+            .'Достаточно одной фразы — детали можно дописать потом.';
+    }
+
+    /**
+     * «Понял, добавил бурый цвет» / «Переключился на гофролист».
+     *
+     * @param  array<string, mixed>  $query
+     * @param  array<string, mixed>  $turn
+     */
+    private function acknowledgement(array $query, array $turn): ?string
+    {
+        $kind = $turn['turn_kind'] ?? null;
+        $added = $turn['added_fields'] ?? [];
+        $dropped = $turn['dropped_fields'] ?? [];
+        $switched = $turn['switched_from'] ?? [];
+
+        if ($kind === TurnInterpreter::KIND_TOPIC_SWITCH) {
+            $catName = $this->categoryNames($query);
+            $msg = $catName !== null
+                ? "Переключился на **{$catName}**."
+                : 'Понял, новая категория.';
+            // Mention new constraints from this same message (e.g. «Т-23»).
+            $fresh = array_values(array_diff($added, ['category_slugs']));
+            if ($fresh !== []) {
+                $msg .= ' Учёл '.$this->labelList($fresh).'.';
+            }
+            if ($switched !== []) {
+                $msg .= ' Параметры от прошлого запроса ('.$this->labelList($switched).') сбросил — они не относятся к этой категории.';
+            }
+            $kept = $this->keptSummary($query);
+            if ($kept !== null) {
+                $msg .= " Оставил {$kept}.";
+            }
+
+            return $msg;
+        }
+
+        if ($dropped !== []) {
+            $msg = 'Убрал из запроса '.$this->labelList($dropped).'.';
+            $running = $this->runningSummary($query);
+            if ($running !== null) {
+                $msg .= " Сейчас ищу: {$running}.";
+            }
+
+            return $msg;
+        }
+
+        if ($kind === TurnInterpreter::KIND_REFINE && $added !== []) {
+            // Dimensions arrive as three fields — say it once.
+            $labels = $this->labelList($added);
+
+            return 'Понял, учёл '.$labels.'.';
+        }
+
+        if ($kind === TurnInterpreter::KIND_SORT) {
+            return null; // the sort line itself is enough
+        }
+
+        return null;
+    }
+
+    /**
+     * Human label for a set of removed fields — used to log the UI edit in the
+     * transcript ("Убрать из запроса: цвет").
+     *
+     * @param  list<string>  $fields
+     */
+    public function describeRemoval(array $fields): ?string
+    {
+        return $fields === [] ? null : $this->labelList($fields);
+    }
+
+    /**
+     * @param  list<string>  $fields
+     */
+    private function labelList(array $fields): string
+    {
+        $dims = ['length_mm', 'width_mm', 'height_mm'];
+        $hasDims = array_intersect($dims, $fields) !== [];
+
+        $labels = [];
+        if ($hasDims) {
+            $labels[] = 'размеры';
+        }
+        foreach ($fields as $f) {
+            if (in_array($f, $dims, true)) {
+                continue;
+            }
+            $label = self::FIELD_LABELS[$f] ?? null;
+            if ($label !== null) {
+                $labels[] = $label;
+            }
+        }
+
+        $labels = array_values(array_unique($labels));
+
+        return $labels === [] ? 'уточнение' : implode(', ', $labels);
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     */
+    private function categoryNames(array $query): ?string
+    {
+        $slugs = $query['category_slugs'] ?? [];
+        if (! is_array($slugs) || $slugs === []) {
+            return null;
+        }
+        $names = collect(config('agora.categories', []))
+            ->whereIn('slug', $slugs)
+            ->pluck('name')
+            ->all();
+
+        return $names === [] ? null : implode(', ', $names);
+    }
+
+    /**
+     * Compact one-line summary of the running query, e.g.
+     * «гофрокороба 400×300×200 мм, бурый, 5000 шт, Москва».
+     *
+     * @param  array<string, mixed>  $query
+     */
+    private function runningSummary(array $query): ?string
+    {
+        $bits = [];
+
+        $cat = $this->categoryNames($query);
+        if ($cat !== null) {
+            $bits[] = mb_strtolower($cat);
+        }
+        if (! empty($query['box_type'])) {
+            $bits[] = mb_strtolower((string) $query['box_type']);
+        }
+        $dims = array_filter([
+            $query['length_mm'] ?? null,
+            $query['width_mm'] ?? null,
+            $query['height_mm'] ?? null,
+        ]);
+        if ($dims !== []) {
+            $bits[] = implode('×', $dims).' мм';
+        }
+        if (! empty($query['board_grade'])) {
+            $bits[] = (string) $query['board_grade'];
+        }
+        if (! empty($query['liner_color'])) {
+            $bits[] = mb_strtolower((string) $query['liner_color']);
+        }
+        if (($query['print_needed'] ?? null) === true) {
+            $bits[] = 'с печатью';
+        }
+        if (! empty($query['qty'])) {
+            $bits[] = number_format((int) $query['qty'], 0, '.', ' ').' шт';
+        }
+        if (! empty($query['city'])) {
+            $bits[] = (string) $query['city'];
+        }
+        if (! empty($query['lead_time_days_max'])) {
+            $bits[] = 'до '.(int) $query['lead_time_days_max'].' дн.';
+        }
+
+        return $bits === [] ? null : implode(', ', $bits);
+    }
+
+    /** Cross-category constraints that survive a topic switch. */
+    private function keptSummary(array $query): ?string
+    {
+        $bits = [];
+        if (! empty($query['city'])) {
+            $bits[] = (string) $query['city'];
+        }
+        if (! empty($query['qty'])) {
+            $bits[] = number_format((int) $query['qty'], 0, '.', ' ').' шт';
+        }
+        if (! empty($query['lead_time_days_max'])) {
+            $bits[] = 'срок до '.(int) $query['lead_time_days_max'].' дн.';
+        }
+
+        return $bits === [] ? null : implode(', ', $bits);
     }
 
     /** Russian plural: 1 оффер / 2 оффера / 5 офферов. */
@@ -158,10 +427,11 @@ class AnswerComposer
     private function slotHint(string $slot): string
     {
         return match ($slot) {
-            'length_mm', 'width_mm', 'height_mm' => 'укажите внутренний размер Д×Ш×В в мм.',
+            'length_mm', 'width_mm', 'height_mm' => 'укажите размер Д×Ш×В в мм.',
             'qty' => 'назовите объём (шт разово или в месяц).',
             'box_type' => 'уточните тип короба (самосбор / 4-клапан и т.д.).',
             'city' => 'уточните город доставки.',
+            'category' => 'скажите, что именно упаковываем — короба, плёнка, лоток.',
             default => 'добавьте ещё деталей по задаче.',
         };
     }
@@ -174,38 +444,89 @@ class AnswerComposer
      * @param  list<array{offer: Offer, score: int, reasons: list<string>, gaps?: list<string>, tier?: string}>  $matches
      * @return list<string>
      */
-    public function repliesFor(array $query, array $matches): array
+    public function repliesFor(array $query, array $matches, array $turn = []): array
     {
-        return $this->suggestedReplies($query, $matches);
+        return $this->suggestedReplies($query, $matches, $turn);
     }
 
     /**
+     * Context-aware follow-ups: only offer what actually moves this conversation
+     * forward, and never suggest re-stating something already known.
+     *
      * @param  array<string, mixed>  $query
      * @param  list<array{offer: Offer, score: int, reasons: list<string>, gaps?: list<string>, tier?: string}>  $matches
+     * @param  array<string, mixed>  $turn
      * @return list<string>
      */
-    private function suggestedReplies(array $query, array $matches): array
+    private function suggestedReplies(array $query, array $matches, array $turn = []): array
     {
+        $isBoxes = in_array('corrugated-boxes', $query['category_slugs'] ?? [], true);
+        $conversational = ($turn['should_match'] ?? true) === false;
+
+        // Nothing searched yet — offer entry points, not refinements.
+        if ($conversational && ! $this->hasConstraints($query)) {
+            return [
+                'Короба под маркетплейсы, Москва',
+                'Самосбор 400×300×200, 5000 шт',
+                'Гофролист Т-23 оптом',
+                'Что есть в каталоге?',
+            ];
+        }
+
         $out = [];
-        if (empty($query['length_mm'])) {
+
+        // Missing essentials first — these change the result the most.
+        if (empty($query['length_mm']) && $isBoxes) {
             $out[] = 'Размер 400×300×200 мм';
         }
         if (empty($query['qty'])) {
             $out[] = 'Нужно около 5000 шт/мес';
         }
+        if (($query['delivery_moscow'] ?? null) !== true && empty($query['city'])) {
+            $out[] = 'Доставка в Москву';
+        }
         if (($query['print_needed'] ?? null) !== true) {
             $out[] = 'Нужна печать логотипа';
         }
-        if (($query['delivery_moscow'] ?? null) !== true) {
-            $out[] = 'Доставка в Москву';
+
+        // Offer to relax a constraint when the result is thin — the buyer often
+        // doesn't realise which requirement is the expensive one.
+        $weak = $matches !== [] && ($matches[0]['score'] ?? 0) < OfferMatcher::TIER_EXACT;
+        if (($weak || count($matches) <= 1)) {
+            if (! empty($query['liner_color'])) {
+                $out[] = 'Цвет не важен';
+            } elseif (! empty($query['board_grade'])) {
+                $out[] = 'Марка не важна';
+            } elseif (! empty($query['box_type'])) {
+                $out[] = 'Тип короба не важен';
+            }
         }
+
         if (count($matches) >= 2) {
             $out[] = 'Сравни топ-3';
             $out[] = 'Покажи дешевле';
         }
-        $out[] = 'Передать менеджеру';
+
+        if ($matches !== []) {
+            $out[] = 'Передать менеджеру';
+        }
 
         return array_slice(array_values(array_unique($out)), 0, 4);
+    }
+
+    /**
+     * @param  array<string, mixed>  $query
+     */
+    private function hasConstraints(array $query): bool
+    {
+        foreach (['category_slugs', 'length_mm', 'qty', 'city', 'box_type', 'board_grade', 'liner_color'] as $k) {
+            $v = $query[$k] ?? null;
+            if ($v !== null && $v !== '' && $v !== []) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -220,6 +541,7 @@ class AnswerComposer
         array $matches,
         string $userMessage,
         array $stats,
+        array $turn = [],
         bool $json = true,
     ): array {
         $cards = [];
@@ -236,32 +558,70 @@ class AnswerComposer
             ];
         }
 
-        $rules = 'Ты консультант-закупщик упаковки Agora. Пиши коротко, по-деловому, на русском. '
-            .'Опирайся ТОЛЬКО на переданный список matches — не добавляй товары, поставщиков, цены и сроки от себя. '
-            .'Если точных совпадений нет — скажи это прямо, без бодрого тона, и назови, чего не хватает (поле gaps). '
-            .'Не преувеличивай качество матча: score — это процент соответствия заявленным требованиям. '
-            .'Если каталог маленький (см. catalog_stats) — упомяни это как ограничение, а не как «мы нашли лучшее на рынке». '
-            .'2–4 коротких абзаца, затем 1–3 следующих шага.';
+        $rules = <<<'RULES'
+Ты Agora AI — консультант по закупке упаковки. Ты ведёшь ЖИВОЙ ДИАЛОГ, а не выдаёшь отчёты.
+
+Тон:
+- Говори как опытный коллега-закупщик: спокойно, по-деловому, на «вы», без канцелярита и без бодрого маркетинга.
+- Пиши связным текстом. НЕ используй шаблон «Следующие шаги: 1. 2. 3.» в каждом ответе.
+- Не начинай ответ с «По вашему запросу...». Продолжай разговор так, как его продолжил бы человек.
+- 2–4 коротких абзаца. Никаких заголовков и таблиц.
+
+Память диалога (turn_context):
+- turn_context.kind говорит, что это за реплика: refine (уточнение), topic_switch (сменил тему), search (новый поиск), sort (пересортировка).
+- Если added_fields непусто — коротко подтверди, что именно ты учёл («Понял, добавил бурый цвет»), и скажи, как это изменило выдачу (стало меньше/больше вариантов), если это видно из данных.
+- Если dropped_fields непусто — подтверди, что снял это требование.
+- Если kind = topic_switch — явно скажи, что переключился на новую категорию и что сбросил неподходящие параметры (switched_from). Не тащи старые размеры в новый запрос.
+- НЕ перечисляй заново все известные параметры в каждом ответе. Покупатель их помнит — он их только что назвал.
+
+Факты:
+- Опирайся ТОЛЬКО на matches. Не выдумывай товары, поставщиков, цены, сроки, ИНН.
+- score — процент соответствия ЗАЯВЛЕННЫМ требованиям, не «качество товара». Не преувеличивай.
+- Если точных совпадений нет — скажи прямо и назови, чего не хватает (gaps).
+- Если каталог маленький (catalog_stats.is_thin) — упомяни это как ограничение выбора, но не повторяй в каждом сообщении подряд.
+- Если matches пуст, и это приветствие или вопрос о возможностях — просто поговори: ответь на вопрос и предложи описать задачу. Ничего не «находи».
+
+В конце — максимум один естественный вопрос или предложение следующего шага, если он уместен. Если покупателю всё ясно, вопрос не нужен.
+RULES;
 
         if ($json) {
-            $rules .= ' Верни JSON: {"message":"..."} с markdown-текстом.';
+            $rules .= "\n\nВерни JSON: {\"message\":\"...\"} с markdown-текстом.";
         } else {
-            $rules .= ' Верни только текст ответа в markdown, без JSON и без пояснений.';
+            $rules .= "\n\nВерни только текст ответа в markdown, без JSON и без пояснений.";
         }
 
-        return [
-            ['role' => 'system', 'content' => $rules],
-            [
-                'role' => 'user',
-                'content' => json_encode([
-                    'user_message' => $userMessage,
-                    'structured_query' => $query,
-                    'catalog_stats' => $stats,
-                    'matches' => $cards,
-                    'draft' => $template,
-                ], JSON_UNESCAPED_UNICODE),
-            ],
+        $messages = [['role' => 'system', 'content' => $rules]];
+
+        // Real dialogue turns, so the model can refer back naturally instead of
+        // treating every message as the first one.
+        foreach (array_slice($turn['history'] ?? [], -6) as $h) {
+            $role = $h['role'] ?? '';
+            if (! in_array($role, ['user', 'assistant'], true)) {
+                continue;
+            }
+            $messages[] = ['role' => $role, 'content' => mb_substr((string) ($h['content'] ?? ''), 0, 1200)];
+        }
+
+        $messages[] = [
+            'role' => 'user',
+            'content' => json_encode([
+                'user_message' => $userMessage,
+                'structured_query' => $query,
+                'turn_context' => [
+                    'kind' => $turn['turn_kind'] ?? null,
+                    'added_fields' => $turn['added_fields'] ?? [],
+                    'dropped_fields' => $turn['dropped_fields'] ?? [],
+                    'switched_from' => $turn['switched_from'] ?? [],
+                    'previous_result_count' => $turn['previous_result_count'] ?? null,
+                    'current_result_count' => count($matches),
+                ],
+                'catalog_stats' => $stats,
+                'matches' => $cards,
+                'draft' => $template,
+            ], JSON_UNESCAPED_UNICODE),
         ];
+
+        return $messages;
     }
 
     /**
@@ -278,15 +638,17 @@ class AnswerComposer
         array $matches,
         string $userMessage,
         array $stats,
+        array $turn = [],
     ): ?array {
-        $messages = $this->llmMessages($template, $query, $matches, $userMessage, $stats);
-        $resp = $this->llm->chat($messages, json: true, temperature: 0.3);
+        $messages = $this->llmMessages($template, $query, $matches, $userMessage, $stats, $turn);
+        $resp = $this->llm->chat($messages, json: true, temperature: 0.4);
         if ($resp === null) {
             return null;
         }
         $parsed = json_decode($resp['content'], true);
         $msg = is_array($parsed) ? ($parsed['message'] ?? null) : null;
-        if (! is_string($msg) || mb_strlen($msg) <= 20) {
+        // Conversational replies are legitimately short ("Здравствуйте! ...").
+        if (! is_string($msg) || mb_strlen(trim($msg)) < 10) {
             return null;
         }
 

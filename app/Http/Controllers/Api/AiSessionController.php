@@ -93,6 +93,24 @@ class AiSessionController extends Controller
     }
 
     /**
+     * Removes one or more constraints and re-runs the match — the "×" on a
+     * chip in the UI. No LLM call: this is a deterministic edit.
+     */
+    public function refine(Request $request, string $session)
+    {
+        $this->throttle($request, 'ai-session-msg:'.$session, 60);
+
+        $data = $request->validate([
+            'remove' => ['required', 'array', 'min:1'],
+            'remove.*' => ['string', 'max:40'],
+        ]);
+
+        $model = $this->activeSession($session);
+
+        return response()->json($this->ai->refine($model, $data['remove']));
+    }
+
+    /**
      * Server-sent events: matches land immediately, prose streams token by token.
      *
      * Frame types: `stage`, `understood`, `results`, `delta`, `done`, `error`.
@@ -143,6 +161,7 @@ class AiSessionController extends Controller
                     $prepared['matches'],
                     $userMessage,
                     $prepared['stats'],
+                    $prepared,
                 );
 
                 $text = null;
@@ -159,7 +178,7 @@ class AiSessionController extends Controller
                     );
                     if (is_array($streamed) && ! empty($streamed['content'])) {
                         $text = $streamed['content'];
-                        $llmUsed = mb_strlen(trim($text)) > 20;
+                        $llmUsed = mb_strlen(trim($text)) >= 10;
                         if ($llmUsed) {
                             if (! empty($streamed['usage'])) {
                                 $composeUsage = LlmCost::fromUsage($streamed['usage'], $streamed['model'] ?? null);
@@ -177,6 +196,7 @@ class AiSessionController extends Controller
                         $prepared['query'],
                         $prepared['matches'],
                         $prepared['stats'],
+                        $prepared,
                     );
                     // No stream happened (or it failed) — deliver the fallback whole.
                     $emit('delta', ['text' => $text, 'replace' => true]);
@@ -187,7 +207,7 @@ class AiSessionController extends Controller
                     $model,
                     $prepared,
                     (string) $text,
-                    $this->composer->repliesFor($prepared['query'], $prepared['matches']),
+                    $this->composer->repliesFor($prepared['query'], $prepared['matches'], $prepared),
                     $llmUsed,
                     $composeUsage,
                     includeCost: false,

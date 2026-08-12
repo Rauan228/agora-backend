@@ -13,6 +13,7 @@ GET  /api/ai/catalog                    — размер области поис
 POST /api/ai/sessions
 POST /api/ai/sessions/{id}/messages     — блокирующий ответ
 POST /api/ai/sessions/{id}/stream       — SSE: результаты сразу, текст потоком
+POST /api/ai/sessions/{id}/refine       — снять требование (× на теге), без LLM
 GET  /api/ai/sessions/{id}
 POST /api/ai/sessions/{id}/handoff
 ```
@@ -31,6 +32,71 @@ Public, без auth. Rate limit ~30–40 req/min/IP.
 | Незаполненные карточки не выигрывают | Отсутствие данных в `specs` не даёт баллов и попадает в `match_gaps` |
 | Видна область поиска | `catalog_stats` / `GET /api/ai/catalog` — сколько офферов реально участвовало |
 | Объяснимость в обе стороны | `match_reasons` (что подошло) и `match_gaps` (что расходится) |
+
+---
+
+## Разговорная память (TurnInterpreter)
+
+Ядро «живого чата». Перед парсингом каждая реплика классифицируется, и от этого зависит, что происходит с накопленным `structured_query`.
+
+| `turn.kind` | Когда | Что с контекстом |
+|-------------|-------|------------------|
+| `small_talk` | «привет», «спасибо», «ок» | сохраняется; **поиск не запускается** |
+| `meta` | «что ты можешь», «сколько в каталоге» | сохраняется; поиска нет, бот объясняет себя |
+| `search` | первый содержательный запрос | накапливается |
+| `refine` | «нужен бурый», «а объём 5000» | **дополняется**, прежнее не теряется |
+| `topic_switch` | были короба → «гофролист Т-23» | категорийные поля сбрасываются, сквозные остаются |
+| `reset` | «начнём заново» | всё обнуляется |
+| `sort` | «покажи дешевле», «сравни топ-3» | пересортировка текущего shortlist |
+
+**Смена темы.** Сбрасываются `box_type`, размеры, `board_grade`, `flute_profile`, `liner_color` — они описывают конкретный товар. Остаются `city`, `qty`, `lead_time_days_max`, `moq_max` — они описывают покупателя. Ответ прямо сообщает об этом: «Переключился на Гофролист. Параметры от прошлого запроса (размеры, цвет) сбросил. Оставил Москва, 5 000 шт.»
+
+**Снятие требования.** Работает и фразой («цвет не важен», «марка неважна», «без печати», «любой цвет»), и кнопкой `×` на теге через `/refine`. Снятое переприменяется **после** парсинга: LLM видит старое значение в истории и охотно возвращает его обратно.
+
+**Противоречие.** Свежая реплика важнее старой: «короба 400×300×200» → «нет, лучше 600×400×300» перезаписывает размеры, а не добавляет второй набор.
+
+### `POST /refine`
+
+```http
+POST /api/ai/sessions/{id}/refine
+{ "remove": ["liner_color"] }
+```
+
+Ответ — тот же payload, что у `/messages`. Детерминированно: без обращения к LLM, поэтому мгновенно и не может разойтись с тем, что «думает» чат. Ход пишется в транскрипт, чтобы диалог остался связным.
+
+Ключи для `remove` брать из `understood[].fields` — не угадывать.
+
+### `understood[]` — редактируемый контекст
+
+```json
+{
+  "key": "dimensions",
+  "label": "Размер",
+  "value": "400×300×200 мм (±10%)",
+  "fields": ["length_mm", "width_mm", "height_mm"],
+  "removable": true
+}
+```
+
+Это и есть видимая память диалога. UI рисует теги с `×`; `fields` — что отправить в `/refine`.
+
+### `turn` в ответе
+
+```json
+"turn": {
+  "kind": "refine",
+  "added_fields": ["liner_color"],
+  "dropped_fields": [],
+  "switched_from": [],
+  "searched": true
+}
+```
+
+`searched: false` — поиска не было (small talk / meta). **UI не должен затирать shortlist в этом случае**, иначе «привет» очистит экран. Кадр `results` в SSE несёт `turn` именно для этого.
+
+`added_fields` также используется для краткой подсветки только что добавленного тега.
+
+---
 
 ### `match_tier`
 
@@ -199,10 +265,11 @@ php artisan migrate --seed
 
 | Class | Role |
 |-------|------|
-| `IntentParser` | message → StructuredQuery (LLM + heuristic) |
+| `TurnInterpreter` | **что значит реплика**: small talk / refine / topic switch / drop / reset; решает судьбу накопленного запроса |
+| `IntentParser` | message → StructuredQuery (LLM + heuristic); `categoriesFor()`, `missingSlotsFor()` |
 | `OfferMatcher` | скоринг активных офферов, нормализация 0–100, tiers, gaps |
-| `AnswerComposer` | текст + chips; `streamMessages()` для SSE |
-| `AiMatchingService` | `prepare()` → `finalizePreview()` → `finalize()`; `understood()`, бриф |
+| `AnswerComposer` | текст + chips; подтверждение уточнений, разговорные ответы; `streamMessages()` для SSE |
+| `AiMatchingService` | `prepare()` → `finalizePreview()` → `finalize()`; `understood()`, `refine()`, бриф |
 | `WaveSpeedClient` | OpenAI-compatible HTTP, `chat()` + `streamChat()` |
 
 Tables: `ai_sessions`, `ai_messages`.
@@ -214,7 +281,10 @@ Tables: `ai_sessions`, `ai_messages`.
 ## Tests
 
 ```bash
-php artisan test --filter=AiMatchingTest
+php artisan test --filter=AiMatchingTest      # матчинг и честность score
+php artisan test --filter=AiConversationTest  # память диалога
 ```
 
-Покрыто: создание сессии и матч, handoff, история, `/catalog`, keywords не обнуляют выдачу, несовпавший размер никогда не `exact`, `understood`, SSE-кадры, пересортировка сохраняет реальные score.
+`AiMatchingTest`: создание сессии и матч, handoff, история, `/catalog`, keywords не обнуляют выдачу, несовпавший размер никогда не `exact`, `understood`, SSE-кадры, пересортировка сохраняет реальные score, cost-метр только в админском API.
+
+`AiConversationTest`: уточнение помнится между ходами, поздняя реплика перезаписывает раннюю, смена темы сбрасывает категорийные поля но хранит город/объём, снятие требования словами и через `/refine`, приветствие не запускает поиск, сброс очищает всё, бот не переспрашивает уже известное.

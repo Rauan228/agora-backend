@@ -96,6 +96,28 @@ class OfferMatcher
     }
 
     /**
+     * Stats shape for turns where no search ran (small talk, meta questions).
+     *
+     * @return array<string, mixed>
+     */
+    public function emptyStats(): array
+    {
+        $total = $this->baseQuery()->count();
+
+        return [
+            'active_offers_total' => $total,
+            'offers_in_requested_category' => $total,
+            'scored_candidates' => 0,
+            'returned' => 0,
+            'relaxed' => null,
+            'exact_count' => 0,
+            'top_score' => 0,
+            'requested_categories' => [],
+            'searched' => false,
+        ];
+    }
+
+    /**
      * Backwards-compatible entry point.
      *
      * @param  array<string, mixed>  $query

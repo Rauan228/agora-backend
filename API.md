@@ -68,6 +68,7 @@ NEXT_PUBLIC_API_URL=https://agora.178.88.115.213.sslip.io/api
 | POST | `/api/ai/sessions` | AI-подбор: создать сессию чата |
 | POST | `/api/ai/sessions/{id}/messages` | AI-подбор: сообщение → shortlist офферов |
 | POST | `/api/ai/sessions/{id}/stream` | AI-подбор: то же, но SSE (результаты сразу, текст потоком) |
+| POST | `/api/ai/sessions/{id}/refine` | AI-подбор: снять требование из запроса (× на теге), без LLM |
 | GET | `/api/ai/sessions/{id}` | AI-подбор: история сессии |
 | POST | `/api/ai/sessions/{id}/handoff` | AI-подбор: передать менеджеру |
 | GET | `/files/{path}` | Отдача файла (лого / фото) — **не** вызывается руками, URL уже в JSON |
