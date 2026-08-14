@@ -123,7 +123,10 @@ class AnswerComposer
         $plan = $turn['order_plan'] ?? [];
         $rec = is_array($plan['recommended'] ?? null) ? $plan['recommended'] : null;
 
-        if (($plan['multi'] ?? false) && is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
+        $pack = is_array($plan['pack'] ?? null) ? $plan['pack'] : null;
+        if (($plan['multi'] ?? false) && is_array($pack) && (int) ($pack['rfq_count'] ?? 0) >= 2) {
+            $parts[] = $this->packLead($pack);
+        } elseif (($plan['multi'] ?? false) && is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
             $parts[] = $this->bundleLead($rec, $plan);
         } elseif ($relaxed === 'all_criteria') {
             $parts[] = 'Точного совпадения в каталоге нет. Показываю **'.$n.'** ближайших варианта — по ним видно, чего не хватает.';
@@ -348,6 +351,51 @@ class AnswerComposer
     }
 
     /**
+     * @param  array<string, mixed>  $pack
+     */
+    private function packLead(array $pack): string
+    {
+        $k = (int) ($pack['rfq_count'] ?? 0);
+        $bits = [];
+        foreach ($pack['groups'] ?? [] as $g) {
+            $names = [];
+            foreach ($g['lines'] ?? [] as $line) {
+                if (! empty($line['covered'])) {
+                    $names[] = mb_strtolower((string) ($line['name'] ?? $line['slug'] ?? ''));
+                }
+            }
+            $who = $g['supplier_name'] ?? 'поставщик';
+            $bits[] = '**'.$who.'** — '.$this->joinPlain($names);
+        }
+
+        $text = 'Одним заводом все позиции сильно не закрыть, дробить на '
+            .$k.' отдельные заявки не нужно. Собираю в **'.$k.' '
+            .$this->plural($k, 'заявку', 'заявки', 'заявок').'**: '.implode('; ', $bits).'.';
+        if (! empty($pack['reason'])) {
+            $text .= ' '.$pack['reason'];
+        }
+
+        return $text;
+    }
+
+    /**
+     * @param  list<string>  $names
+     */
+    private function joinPlain(array $names): string
+    {
+        $names = array_values(array_filter($names));
+        if ($names === []) {
+            return 'позиции';
+        }
+        if (count($names) === 1) {
+            return $names[0];
+        }
+        $last = array_pop($names);
+
+        return implode(', ', $names).' и '.$last;
+    }
+
+    /**
      * Lead paragraph when one supplier covers every line of the kit.
      *
      * @param  array<string, mixed>  $rec
@@ -420,6 +468,45 @@ class AnswerComposer
                 'lines' => $lines,
             ] : null,
             'split' => $plan['split'] ?? null,
+            'pack' => $this->packForLlm($plan['pack'] ?? null),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $pack
+     * @return array<string, mixed>|null
+     */
+    private function packForLlm(?array $pack): ?array
+    {
+        if (! is_array($pack)) {
+            return null;
+        }
+        $groups = [];
+        foreach ($pack['groups'] ?? [] as $g) {
+            $lines = [];
+            foreach ($g['lines'] ?? [] as $line) {
+                $lines[] = [
+                    'name' => $line['name'] ?? null,
+                    'title' => $line['match']['offer']->offer_title
+                        ?? $line['offer']['offer_title']
+                        ?? null,
+                    'score' => $line['match']['score'] ?? $line['offer']['match_score'] ?? null,
+                ];
+            }
+            $groups[] = [
+                'supplier_name' => $g['supplier_name'] ?? null,
+                'covers' => $g['covers'] ?? count($lines),
+                'lines' => $lines,
+            ];
+        }
+
+        return [
+            'rfq_count' => $pack['rfq_count'] ?? 0,
+            'kind' => $pack['kind'] ?? null,
+            'all_solid' => $pack['all_solid'] ?? false,
+            'label' => $pack['label'] ?? null,
+            'reason' => $pack['reason'] ?? null,
+            'groups' => $groups,
         ];
     }
 
@@ -575,7 +662,18 @@ class AnswerComposer
         $out = [];
 
         $rec = $turn['order_plan']['recommended'] ?? null;
-        if (is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
+        $pack = $turn['order_plan']['pack'] ?? null;
+        if (is_array($pack) && (int) ($pack['rfq_count'] ?? 0) >= 2) {
+            $names = [];
+            foreach ($pack['groups'] ?? [] as $g) {
+                if (! empty($g['supplier_name'])) {
+                    $names[] = $g['supplier_name'];
+                }
+            }
+            if ($names !== []) {
+                $out[] = 'Собрать в '.count($names).' заявки: '.implode(' + ', $names);
+            }
+        } elseif (is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
             $out[] = 'Оставить обе позиции у '.$rec['supplier_name'];
         }
 
@@ -685,7 +783,8 @@ class AnswerComposer
 - Если каталог маленький (catalog_stats.is_thin) — упомяни это как ограничение выбора, но не повторяй в каждом сообщении подряд.
 - Если matches пуст, и это приветствие или вопрос о возможностях — просто поговори: ответь на вопрос и предложи описать задачу. Ничего не «находи».
 - Если order_plan.multi и recommended.kind = full_cover — это оптовый комплект. Сначала скажи, что оба типа есть у одного поставщика и это одна заявка, не пять. Назови поставщика и позиции. Не выдумывай, что он произведёт то, чего нет в matches. Если по одной линии совпадение слабое (weak_line) — скажи честно.
-- order_plan.recommended.lines — ЕДИНСТВЕННАЯ правда о комплекте. Не пиши, что убрал категорию, если она есть в lines. Не пиши, что позиций две, если lines четыре. Перечисляй только эти линии.
+- order_plan.recommended.lines — правда, когда rfq = 1. Если order_plan.pack.rfq_count >= 2 — правда это pack.groups: каждая группа = одна заявка одному заводу. Не говори «придётся 4 заявки», если pack собрал 2. Не выдумывай заводы вне groups.
+- order_plan.recommended.lines — ЕДИНСТВЕННАЯ правда о комплекте при одной заявке. Не пиши, что убрал категорию, если она есть в lines.
 - Не предлагай дробить комплект на разных поставщиков, пока один закрывает все линии. Альтернативы по отдельным позициям можно упомянуть коротко.
 - Если turn_context.kind = restate_kit — покупатель назвал новый набор позиций. Не путай с «ещё».
 

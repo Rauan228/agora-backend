@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use Database\Seeders\CategorySeeder;
+use Database\Seeders\DemoCatalogSeeder;
 use Database\Seeders\OfferSeeder;
 use Database\Seeders\SupplierSeeder;
 use Illuminate\Foundation\Testing\RefreshDatabase;
@@ -304,5 +305,31 @@ class AiMatchingTest extends TestCase
 
         $this->assertFalse($res->json('order_plan.multi'));
         $this->assertNull($res->json('order_plan.recommended'));
+    }
+
+    public function test_four_lines_pack_into_fewer_rfqs_than_lines(): void
+    {
+        $this->seed(DemoCatalogSeeder::class);
+
+        $sessionId = $this->postJson('/api/ai/sessions')->json('session_id');
+        $res = $this->postJson("/api/ai/sessions/{$sessionId}/messages", [
+            'message' => 'гофрокороб 600x400x300 четырёхклапанный, гофролист, скотч и стрейч, Москва, 8000 шт',
+        ])->assertOk();
+
+        $pack = $res->json('order_plan.pack');
+        $this->assertIsArray($pack);
+        $this->assertGreaterThanOrEqual(1, $pack['rfq_count']);
+        $this->assertLessThanOrEqual(3, $pack['rfq_count']);
+        $this->assertLessThan(4, $pack['rfq_count'], 'must not open one ticket per line');
+        $this->assertCount($pack['rfq_count'], $pack['groups']);
+
+        $covered = [];
+        foreach ($pack['groups'] as $g) {
+            foreach ($g['lines'] as $line) {
+                $covered[] = $line['slug'];
+            }
+        }
+        $this->assertContains('corrugated-boxes', $covered);
+        $this->assertContains('stretch-film', $covered);
     }
 }

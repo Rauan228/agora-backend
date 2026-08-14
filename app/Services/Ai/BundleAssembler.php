@@ -246,7 +246,18 @@ class BundleAssembler
         });
 
         $full = array_values(array_filter($bundles, fn ($b) => $b['kind'] === 'full_cover'));
-        $recommended = $full[0] ?? null;
+        $pack = $this->buildPack($lines, $supplierIndex);
+
+        $recommended = null;
+        if (($pack['rfq_count'] ?? 0) === 1 && ($pack['groups'][0]['supplier_id'] ?? null)) {
+            $sid = (int) $pack['groups'][0]['supplier_id'];
+            foreach ($full as $b) {
+                if ((int) $b['supplier_id'] === $sid) {
+                    $recommended = $b;
+                    break;
+                }
+            }
+        }
 
         return [
             'multi' => true,
@@ -255,6 +266,7 @@ class BundleAssembler
             'bundles' => array_slice($bundles, 0, 4),
             'full_cover_count' => count($full),
             'split' => $this->splitAlternative($lines),
+            'pack' => $pack,
         ];
     }
 
@@ -270,6 +282,7 @@ class BundleAssembler
             'bundles' => [],
             'full_cover_count' => 0,
             'split' => null,
+            'pack' => null,
         ];
     }
 
@@ -295,11 +308,22 @@ class BundleAssembler
             $out[] = $row;
         };
 
-        $rec = $plan['recommended'] ?? null;
-        if (is_array($rec)) {
-            foreach ($rec['lines'] as $line) {
-                if (! empty($line['match'])) {
-                    $push($line['match']);
+        $pack = $plan['pack'] ?? null;
+        if (is_array($pack)) {
+            foreach ($pack['groups'] ?? [] as $group) {
+                foreach ($group['lines'] ?? [] as $line) {
+                    if (! empty($line['match'])) {
+                        $push($line['match']);
+                    }
+                }
+            }
+        } else {
+            $rec = $plan['recommended'] ?? null;
+            if (is_array($rec)) {
+                foreach ($rec['lines'] as $line) {
+                    if (! empty($line['match'])) {
+                        $push($line['match']);
+                    }
                 }
             }
         }
@@ -383,6 +407,237 @@ class BundleAssembler
             'full_cover_suppliers' => $plan['full_cover_count'] ?? 0,
             'recommended_supplier' => $plan['recommended']['supplier_name'] ?? null,
         ];
+    }
+
+    /**
+     * Minimum RFQ cover: 1 factory if it is solid on every line, otherwise
+     * 2–3 factories (e.g. box at A, sheet+tape+stretch at B) instead of 4 tickets.
+     *
+     * A line is "solid" at ≥ exact-tier (75), "ok" at ≥ close-tier (50).
+     * A weak 53% box must not beat two strong RFQs.
+     *
+     * @param  list<array<string, mixed>>  $lines
+     * @param  array<int, array<string, mixed>>  $supplierIndex
+     * @return array<string, mixed>
+     */
+    private function buildPack(array $lines, array $supplierIndex): array
+    {
+        $neededSlugs = [];
+        $nameBySlug = [];
+        foreach ($lines as $line) {
+            $neededSlugs[] = $line['slug'];
+            $nameBySlug[$line['slug']] = $line['name'];
+        }
+
+        $players = [];
+        foreach ($supplierIndex as $entry) {
+            $ok = [];
+            $solid = [];
+            foreach ($entry['picked'] as $slug => $row) {
+                if ($row['score'] >= OfferMatcher::TIER_CLOSE) {
+                    $ok[$slug] = $row;
+                }
+                if ($row['score'] >= OfferMatcher::TIER_EXACT) {
+                    $solid[$slug] = $row;
+                }
+            }
+            if ($ok === []) {
+                continue;
+            }
+            $players[] = [
+                'id' => (int) $entry['id'],
+                'name' => $entry['name'],
+                'logo_url' => $entry['logo_url'],
+                'ok' => $ok,
+                'solid' => $solid,
+            ];
+        }
+
+        $best = $this->bestCover($players, $neededSlugs, true)
+            ?? $this->bestCover($players, $neededSlugs, false);
+
+        if ($best === null) {
+            return [
+                'rfq_count' => 0,
+                'kind' => 'uncovered',
+                'all_solid' => false,
+                'label' => 'Комплект не собирается',
+                'reason' => 'В каталоге нет комбинации заводов, которая закрывает все позиции.',
+                'groups' => [],
+                'uncovered' => $neededSlugs,
+            ];
+        }
+
+        $groupsBySid = [];
+        foreach ($best['assigned'] as $slug => $row) {
+            $sid = (int) $row['_sid'];
+            if (! isset($groupsBySid[$sid])) {
+                $groupsBySid[$sid] = [
+                    'supplier_id' => $sid,
+                    'supplier_name' => $row['_sname'],
+                    'logo_url' => $row['_logo'] ?? null,
+                    'lines' => [],
+                    'scores' => [],
+                ];
+            }
+            $match = $row;
+            unset($match['_sid'], $match['_sname'], $match['_logo']);
+            $groupsBySid[$sid]['lines'][] = [
+                'slug' => $slug,
+                'name' => $nameBySlug[$slug] ?? $slug,
+                'covered' => true,
+                'match' => $match,
+            ];
+            $groupsBySid[$sid]['scores'][] = (int) $row['score'];
+        }
+
+        $groups = [];
+        $bits = [];
+        foreach ($groupsBySid as $g) {
+            $min = min($g['scores']);
+            $avg = (int) round(array_sum($g['scores']) / max(1, count($g['scores'])));
+            $lineNames = array_map(fn ($l) => mb_strtolower((string) $l['name']), $g['lines']);
+            $groups[] = [
+                'kind' => 'pack_group',
+                'supplier_id' => $g['supplier_id'],
+                'supplier_name' => $g['supplier_name'],
+                'logo_url' => $g['logo_url'],
+                'covers' => count($g['lines']),
+                'needed' => count($neededSlugs),
+                'coverage_pct' => (int) round(100 * count($g['lines']) / max(1, count($neededSlugs))),
+                'min_score' => $min,
+                'avg_score' => $avg,
+                'weak_line' => $min < OfferMatcher::TIER_EXACT,
+                'label' => 'Заявка · '.$g['supplier_name'],
+                'reason' => $g['supplier_name'].' — '.$this->joinRu($lineNames),
+                'lines' => $g['lines'],
+            ];
+            $bits[] = $g['supplier_name'].' ('.$this->joinRu($lineNames).')';
+        }
+
+        $k = count($groups);
+        $allSolid = (bool) $best['solid'];
+        $label = $k === 1 ? 'Одна заявка' : $k.' заявки вместо '.count($neededSlugs);
+
+        if ($k === 1) {
+            $reason = $allSolid
+                ? $groups[0]['supplier_name'].' закрывает весь комплект одной оптовой заявкой.'
+                : $groups[0]['supplier_name'].' закрывает все линии, но по одной совпадение слабое.';
+        } else {
+            $reason = 'Одним заводом все '.count($neededSlugs).' позиций сильно не закрыть. Собираю в '.$k
+                .' заявки: '.implode('; ', $bits).'.';
+        }
+
+        return [
+            'rfq_count' => $k,
+            'kind' => $k === 1 ? 'full_cover' : 'split_cover',
+            'all_solid' => $allSolid,
+            'label' => $label,
+            'reason' => $reason,
+            'groups' => $groups,
+            'uncovered' => [],
+            'min_score' => $best['min'],
+            'avg_score' => $best['avg'],
+        ];
+    }
+
+    /**
+     * Smallest k that covers every needed slug. Quality first (solid), then size.
+     *
+     * @param  list<array<string, mixed>>  $players
+     * @param  list<string>  $needed
+     * @return array{k: int, assigned: array<string, mixed>, min: int, avg: int, solid: bool}|null
+     */
+    private function bestCover(array $players, array $needed, bool $solidOnly): ?array
+    {
+        $pool = [];
+        foreach ($players as $p) {
+            $map = $solidOnly ? $p['solid'] : $p['ok'];
+            if ($map === []) {
+                continue;
+            }
+            $p['map'] = $map;
+            $pool[] = $p;
+        }
+
+        $n = count($pool);
+        $maxK = min(3, count($needed), $n);
+        for ($k = 1; $k <= $maxK; $k++) {
+            $best = null;
+            $this->eachCombination($pool, $k, function (array $set) use ($needed, &$best): void {
+                $assigned = [];
+                foreach ($needed as $slug) {
+                    $winner = null;
+                    foreach ($set as $p) {
+                        if (! isset($p['map'][$slug])) {
+                            continue;
+                        }
+                        $row = $p['map'][$slug];
+                        if ($winner === null || $row['score'] > $winner['score']) {
+                            $winner = $row + [
+                                '_sid' => $p['id'],
+                                '_sname' => $p['name'],
+                                '_logo' => $p['logo_url'] ?? null,
+                            ];
+                        }
+                    }
+                    if ($winner === null) {
+                        return;
+                    }
+                    $assigned[$slug] = $winner;
+                }
+                $scores = array_map(fn ($r) => (int) $r['score'], $assigned);
+                $cand = [
+                    'k' => count($set),
+                    'assigned' => $assigned,
+                    'min' => min($scores),
+                    'avg' => (int) round(array_sum($scores) / count($scores)),
+                ];
+                if ($best === null
+                    || $cand['min'] > $best['min']
+                    || ($cand['min'] === $best['min'] && $cand['avg'] > $best['avg'])) {
+                    $best = $cand;
+                }
+            });
+            if ($best !== null) {
+                $best['solid'] = $solidOnly;
+
+                return $best;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param  list<mixed>  $items
+     * @param  callable(list<mixed>): void  $visit
+     */
+    private function eachCombination(array $items, int $k, callable $visit): void
+    {
+        $n = count($items);
+        if ($k <= 0 || $k > $n) {
+            return;
+        }
+        $idx = range(0, $k - 1);
+        while (true) {
+            $set = [];
+            foreach ($idx as $i) {
+                $set[] = $items[$i];
+            }
+            $visit($set);
+            $t = $k - 1;
+            while ($t >= 0 && $idx[$t] === $n - $k + $t) {
+                $t--;
+            }
+            if ($t < 0) {
+                return;
+            }
+            $idx[$t]++;
+            for ($i = $t + 1; $i < $k; $i++) {
+                $idx[$i] = $idx[$i - 1] + 1;
+            }
+        }
     }
 
     public function categoryName(string $slug): string

@@ -859,6 +859,35 @@ class AiMatchingService
             'recommended' => isset($plan['recommended']) ? $this->serializeBundle($plan['recommended']) : null,
             'bundles' => array_map(fn ($b) => $this->serializeBundle($b), $plan['bundles'] ?? []),
             'split' => $plan['split'],
+            'pack' => $this->serializePack($plan['pack'] ?? null),
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $pack
+     * @return array<string, mixed>|null
+     */
+    private function serializePack(?array $pack): ?array
+    {
+        if ($pack === null) {
+            return null;
+        }
+
+        $groups = [];
+        foreach ($pack['groups'] ?? [] as $g) {
+            $groups[] = $this->serializeBundle($g);
+        }
+
+        return [
+            'rfq_count' => $pack['rfq_count'] ?? 0,
+            'kind' => $pack['kind'] ?? null,
+            'all_solid' => (bool) ($pack['all_solid'] ?? false),
+            'label' => $pack['label'] ?? null,
+            'reason' => $pack['reason'] ?? null,
+            'min_score' => $pack['min_score'] ?? null,
+            'avg_score' => $pack['avg_score'] ?? null,
+            'uncovered' => $pack['uncovered'] ?? [],
+            'groups' => $groups,
         ];
     }
 
