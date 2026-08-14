@@ -65,6 +65,8 @@ class AiSessionController extends Controller
     /** All AI chats — for reading / analysis. Not the storefront. */
     public function index(Request $request)
     {
+        $this->ai->closeStaleActive();
+
         $perPage = max(5, min((int) $request->integer('per_page', 30), 100));
 
         $q = AiSession::query()

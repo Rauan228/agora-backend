@@ -2,6 +2,7 @@
 
 namespace Tests\Feature;
 
+use App\Models\AiSession;
 use Database\Seeders\CategorySeeder;
 use Database\Seeders\OfferSeeder;
 use Database\Seeders\SupplierSeeder;
@@ -186,6 +187,28 @@ class AiMatchingTest extends TestCase
                 're-sorting must preserve genuine match reasons'
             );
         }
+    }
+
+    public function test_idle_active_session_closes_after_24_hours(): void
+    {
+        $freshId = $this->postJson('/api/ai/sessions')->json('session_id');
+        $this->postJson("/api/ai/sessions/{$freshId}/messages", [
+            'message' => 'гофрокороб Москва',
+        ])->assertOk();
+
+        $oldId = $this->postJson('/api/ai/sessions')->json('session_id');
+        $this->postJson("/api/ai/sessions/{$oldId}/messages", [
+            'message' => 'стрейч Москва',
+        ])->assertOk();
+
+        $this->travel(25)->hours();
+
+        $this->postJson('/api/ai/sessions')->assertCreated();
+
+        $this->assertSame('closed', AiSession::query()->findOrFail($oldId)->status);
+        $this->assertSame('closed', AiSession::query()->findOrFail($freshId)->status);
+
+        $this->travelBack();
     }
 
     public function test_session_history(): void

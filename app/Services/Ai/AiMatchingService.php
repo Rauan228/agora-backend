@@ -20,12 +20,29 @@ class AiMatchingService
 
     public function createSession(?string $clientKey = null): AiSession
     {
+        $this->closeStaleActive();
+
         return AiSession::create([
             'id' => (string) Str::uuid(),
             'client_key' => $clientKey,
             'status' => 'active',
             'structured_query' => $this->intentParser->emptyQuery(),
         ]);
+    }
+
+    /**
+     * Active chats with no messages for 24h become closed.
+     * handed_off stays in the sales queue.
+     */
+    public function closeStaleActive(int $hours = 24): int
+    {
+        $cutoff = now()->subHours($hours);
+
+        return (int) AiSession::query()
+            ->where('status', 'active')
+            ->where('created_at', '<', $cutoff)
+            ->whereDoesntHave('messages', fn ($m) => $m->where('created_at', '>=', $cutoff))
+            ->update(['status' => 'closed']);
     }
 
     /**
