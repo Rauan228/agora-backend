@@ -25,6 +25,15 @@ class BundleAssembler
         'length_mm',
         'width_mm',
         'height_mm',
+        'liner_color',
+        'print_needed',
+        'branding_needed',
+    ];
+
+    /** Board grade / flute belong to corrugated, not tape or stretch. */
+    private const BOARD_SLUGS = [
+        'corrugated-boxes',
+        'corrugated-sheet',
     ];
 
     public function __construct(
@@ -118,6 +127,12 @@ class BundleAssembler
             }
         }
 
+        if (! in_array($slug, self::BOARD_SLUGS, true)) {
+            $line['board_grade'] = null;
+            $line['flute_profile'] = null;
+            $line['liner_color'] = null;
+        }
+
         return $line;
     }
 
@@ -147,8 +162,10 @@ class BundleAssembler
                         'name' => $offer->supplier?->commercial_name ?? 'Поставщик',
                         'logo_url' => $offer->supplier?->logo_url,
                         'picked' => [],
+                        'depth' => 0,
                     ];
                 }
+                $supplierIndex[$sid]['depth']++;
                 $slug = $line['slug'];
                 $prev = $supplierIndex[$sid]['picked'][$slug] ?? null;
                 if ($prev === null || $row['score'] > $prev['score']) {
@@ -203,6 +220,7 @@ class BundleAssembler
                         ? $entry['name'].' закрывает комплект ('.$kit.'), но по одной позиции совпадение слабое — проверьте gaps.'
                         : $entry['name'].' закрывает обе позиции: '.$kit.'. Одна оптовая заявка, одна отгрузка.')
                     : $entry['name'].' закрывает не весь комплект — без второй позиции заявка разъедется.',
+                'depth' => (int) $entry['depth'],
                 'lines' => $lineRows,
             ];
         }
@@ -220,8 +238,11 @@ class BundleAssembler
             if ($a['min_score'] !== $b['min_score']) {
                 return $b['min_score'] <=> $a['min_score'];
             }
+            if ($a['avg_score'] !== $b['avg_score']) {
+                return $b['avg_score'] <=> $a['avg_score'];
+            }
 
-            return $b['avg_score'] <=> $a['avg_score'];
+            return ($b['depth'] ?? 0) <=> ($a['depth'] ?? 0);
         });
 
         $full = array_values(array_filter($bundles, fn ($b) => $b['kind'] === 'full_cover'));

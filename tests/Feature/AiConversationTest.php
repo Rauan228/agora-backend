@@ -114,6 +114,45 @@ class AiConversationTest extends TestCase
         $this->assertSame('ПаллетПром', $added['order_plan']['recommended']['supplier_name'] ?? null);
     }
 
+    public function test_named_kit_without_esche_replaces_categories(): void
+    {
+        $s = $this->newSession();
+
+        $this->say($s, 'гофрокороб и гофролист, Москва, 5000 шт');
+        $this->say($s, 'ещё скотч');
+        $restated = $this->say($s, 'гофрокороб и стрейч');
+
+        $slugs = $restated['structured_query']['category_slugs'];
+        $this->assertContains('corrugated-boxes', $slugs);
+        $this->assertContains('stretch-film', $slugs);
+        $this->assertNotContains('corrugated-sheet', $slugs);
+        $this->assertNotContains('packing-tape', $slugs);
+        $this->assertSame('restate_kit', $restated['turn']['kind']);
+        $this->assertSame(5000, $restated['structured_query']['qty']);
+        $this->assertSame('Москва', $restated['structured_query']['city']);
+    }
+
+    public function test_tape_line_does_not_inherit_board_grade(): void
+    {
+        $s = $this->newSession();
+
+        $this->say($s, 'гофрокороб 400x300x200 Т-23, Москва, 5000 шт');
+        $added = $this->say($s, 'ещё скотч');
+
+        $this->assertContains('packing-tape', $added['structured_query']['category_slugs']);
+        $this->assertSame('Т-23', $added['structured_query']['board_grade']);
+
+        $tape = collect($added['offers'])->first(
+            fn ($o) => ($o['line_slug'] ?? null) === 'packing-tape'
+                || str_contains(mb_strtolower((string) ($o['offer_title'] ?? '')), 'скотч')
+        );
+        $this->assertNotNull($tape, 'tape offer must be in the shortlist');
+        $gaps = $tape['match_gaps'] ?? [];
+        foreach ($gaps as $gap) {
+            $this->assertStringNotContainsStringIgnoringCase('марка', (string) $gap);
+        }
+    }
+
     public function test_buyer_can_drop_a_constraint_in_words(): void
     {
         $s = $this->newSession();

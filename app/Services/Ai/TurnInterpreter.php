@@ -23,6 +23,8 @@ class TurnInterpreter
 
     public const KIND_ADD_LINE = 'add_line';
 
+    public const KIND_RESTATE_KIT = 'restate_kit';
+
     public const KIND_RESET = 'reset';
 
     public const KIND_SORT = 'sort';
@@ -150,11 +152,12 @@ class TurnInterpreter
 
         if ($newSlugs !== [] && $oldSlugs !== []) {
             $intersect = array_intersect($newSlugs, $oldSlugs);
-            $adding = $this->looksLikeAddLine($text) || count($newSlugs) > 1;
 
-            if ($adding || $intersect !== []) {
+            // «ещё скотч» / «плюс лист» — union. Bare «и» is NOT enough:
+            // «гофрокороб и стрейч» is a new kit, not an append.
+            if ($this->looksLikeAddLine($text)) {
                 $merged = array_values(array_unique(array_merge($oldSlugs, $newSlugs)));
-                if ($merged !== $oldSlugs) {
+                if ($merged !== array_values($oldSlugs)) {
                     $base = $previous;
                     $base['category_slugs'] = $merged;
 
@@ -167,20 +170,21 @@ class TurnInterpreter
                         'is_first_search' => false,
                     ];
                 }
-            } elseif ($intersect === []) {
+            }
+
+            $sameSet = $this->sameSet($newSlugs, $oldSlugs);
+            if (! $sameSet) {
                 $base = $previous;
-                $switched = [];
-                foreach (self::CATEGORY_SCOPED_FIELDS as $field) {
-                    if (! empty($base[$field])) {
-                        $switched[] = $field;
-                    }
+                $base['category_slugs'] = $newSlugs;
+                $switched = $this->fieldsToDropAfterCategoryChange($newSlugs, $base);
+                foreach ($switched as $field) {
                     $base[$field] = null;
                 }
-                // The new category replaces the old one outright.
-                $base['category_slugs'] = $newSlugs;
 
                 return [
-                    'kind' => self::KIND_TOPIC_SWITCH,
+                    'kind' => count($newSlugs) >= 2
+                        ? self::KIND_RESTATE_KIT
+                        : self::KIND_TOPIC_SWITCH,
                     'base_query' => $base,
                     'dropped' => [],
                     'switched_from' => $switched,
@@ -345,13 +349,60 @@ class TurnInterpreter
         );
     }
 
-    /** «ещё лист», «плюс стрейч», «короб и гофролист» — keep the running kit. */
+    /** Explicit append. Bare «и» is a new kit listing, not an add. */
     private function looksLikeAddLine(string $text): bool
     {
         return (bool) preg_match(
-            '/(\bи\b|плюс|еще|ещё|также|так же|вместе|комплект|к этому|добав)/u',
+            '/(плюс|еще|ещё|также|так же|вместе с|к этому|добав)/u',
             $text
         );
+    }
+
+    /**
+     * @param  list<string>  $a
+     * @param  list<string>  $b
+     */
+    private function sameSet(array $a, array $b): bool
+    {
+        sort($a);
+        sort($b);
+
+        return $a === $b;
+    }
+
+    /**
+     * Drop only fields that no remaining line can use. Box size stays if
+     * boxes are still in the kit.
+     *
+     * @param  list<string>  $new
+     * @param  array<string, mixed>  $query
+     * @return list<string>
+     */
+    private function fieldsToDropAfterCategoryChange(array $new, array $query): array
+    {
+        $switched = [];
+        $hasBoxes = in_array('corrugated-boxes', $new, true);
+        $hasBoard = $hasBoxes || in_array('corrugated-sheet', $new, true);
+
+        $boxFields = ['box_type', 'length_mm', 'width_mm', 'height_mm', 'liner_color'];
+        $boardFields = ['board_grade', 'flute_profile'];
+
+        if (! $hasBoxes) {
+            foreach ($boxFields as $field) {
+                if (! empty($query[$field])) {
+                    $switched[] = $field;
+                }
+            }
+        }
+        if (! $hasBoard) {
+            foreach ($boardFields as $field) {
+                if (! empty($query[$field])) {
+                    $switched[] = $field;
+                }
+            }
+        }
+
+        return array_values(array_unique($switched));
     }
 
     /** Does the message name a product, a size, a grade or a quantity? */
