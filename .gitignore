@@ -15,6 +15,9 @@
 /auth.json
 /node_modules
 tmp_offer.json
+/docs/AI_CALL_REPORT.html
+/docs/AI_RESOURCES.md
+/docs/AI_SOZVON.html
 
 /public/build
 /public/fonts-manifest.dev.json
