@@ -98,6 +98,22 @@ class AiConversationTest extends TestCase
         $this->assertStringContainsStringIgnoringCase('гофролист', $switched['assistant_message']);
     }
 
+    public function test_add_line_keeps_box_and_adds_sheet(): void
+    {
+        $s = $this->newSession();
+
+        $this->say($s, 'гофрокороб 400x300x200 бурый, 5000 шт, Москва');
+        $added = $this->say($s, 'ещё гофролист');
+
+        $q = $added['structured_query'];
+        $this->assertContains('corrugated-boxes', $q['category_slugs']);
+        $this->assertContains('corrugated-sheet', $q['category_slugs']);
+        $this->assertSame(400, $q['length_mm'], 'box size must stay on the kit when a line is added');
+        $this->assertSame('add_line', $added['turn']['kind']);
+        $this->assertTrue($added['order_plan']['multi']);
+        $this->assertSame('ПаллетПром', $added['order_plan']['recommended']['supplier_name'] ?? null);
+    }
+
     public function test_buyer_can_drop_a_constraint_in_words(): void
     {
         $s = $this->newSession();

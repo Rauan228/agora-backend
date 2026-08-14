@@ -233,4 +233,51 @@ class AiMatchingTest extends TestCase
         $this->assertArrayHasKey('match_search_usd', $msg->json('cost'));
         $this->assertSame(0, $msg->json('cost.match_search_usd'));
     }
+
+    public function test_box_and_sheet_recommends_one_supplier_bundle(): void
+    {
+        $sessionId = $this->postJson('/api/ai/sessions')->json('session_id');
+
+        $res = $this->postJson("/api/ai/sessions/{$sessionId}/messages", [
+            'message' => 'мне нужен гофрокороб и гофролист, Москва',
+        ]);
+
+        $res->assertOk();
+        $this->assertContains('corrugated-boxes', $res->json('structured_query.category_slugs'));
+        $this->assertContains('corrugated-sheet', $res->json('structured_query.category_slugs'));
+
+        $plan = $res->json('order_plan');
+        $this->assertTrue($plan['multi']);
+        $this->assertSame(2, $plan['needed']);
+        $this->assertNotNull($plan['recommended']);
+        $this->assertSame('full_cover', $plan['recommended']['kind']);
+        $this->assertSame('ПаллетПром', $plan['recommended']['supplier_name']);
+        $this->assertSame(2, $plan['recommended']['covers']);
+        $this->assertCount(2, $plan['recommended']['lines']);
+
+        $covered = collect($plan['recommended']['lines'])->pluck('slug')->all();
+        $this->assertContains('corrugated-boxes', $covered);
+        $this->assertContains('corrugated-sheet', $covered);
+        foreach ($plan['recommended']['lines'] as $line) {
+            $this->assertTrue($line['covered']);
+            $this->assertNotNull($line['offer']);
+        }
+
+        $this->assertTrue(
+            collect($res->json('offers'))->contains(fn ($o) => $o['in_recommended_bundle'] === true)
+        );
+        $this->assertArrayNotHasKey('cost', $res->json());
+        $this->assertStringContainsStringIgnoringCase('ПаллетПром', $res->json('assistant_message'));
+    }
+
+    public function test_single_category_has_no_bundle(): void
+    {
+        $sessionId = $this->postJson('/api/ai/sessions')->json('session_id');
+        $res = $this->postJson("/api/ai/sessions/{$sessionId}/messages", [
+            'message' => 'гофрокороб 400x300x200 Москва',
+        ])->assertOk();
+
+        $this->assertFalse($res->json('order_plan.multi'));
+        $this->assertNull($res->json('order_plan.recommended'));
+    }
 }

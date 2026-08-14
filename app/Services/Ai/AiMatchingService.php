@@ -15,6 +15,7 @@ class AiMatchingService
         private OfferMatcher $matcher,
         private AnswerComposer $composer,
         private TurnInterpreter $interpreter,
+        private BundleAssembler $bundles,
     ) {}
 
     public function createSession(?string $clientKey = null): AiSession
@@ -93,6 +94,8 @@ class AiMatchingService
                 'should_match' => false,
                 'history' => $history,
                 'previous_result_count' => count($lastIds),
+                'order_plan' => $this->bundles->emptyPlan(),
+                'lines' => [],
             ];
         }
 
@@ -119,7 +122,7 @@ class AiMatchingService
             // Re-rank what the buyer is already looking at, keeping real scores.
             $result = $this->resortExisting($lastIds, $query, $sortMode);
         } else {
-            $result = $this->matcher->search($query, limit: 8);
+            $result = $this->bundles->search($query);
         }
 
         return [
@@ -137,6 +140,8 @@ class AiMatchingService
             'should_match' => true,
             'history' => $history,
             'previous_result_count' => count($lastIds),
+            'order_plan' => $result['order_plan'],
+            'lines' => $result['lines'],
         ];
     }
 
@@ -174,7 +179,7 @@ class AiMatchingService
         }
 
         $query = $this->intentParser->normalize($query);
-        $result = $this->matcher->search($query, limit: 8);
+        $result = $this->bundles->search($query);
 
         return [
             'query' => $query,
@@ -189,6 +194,8 @@ class AiMatchingService
             'switched_from' => [],
             'catalog' => $this->catalogSnapshot(),
             'previous_query' => $previous,
+            'order_plan' => $result['order_plan'],
+            'lines' => $result['lines'],
         ];
     }
 
@@ -217,15 +224,18 @@ class AiMatchingService
     public function finalizePreview(array $prepared): array
     {
         $matches = $prepared['matches'];
+        $plan = $prepared['order_plan'] ?? $this->bundles->emptyPlan();
 
         return [
             'structured_query' => $prepared['query'],
             'understood' => $this->understood($prepared['query']),
             'intent_source' => $prepared['intent_source'],
             'catalog_stats' => $prepared['stats'],
-            'offers' => $this->serializeMatches($matches),
+            'offers' => $this->serializeMatches($matches, $plan),
             'suppliers' => $this->uniqueSuppliers($matches),
             'comparison' => $this->buildComparison($matches),
+            'order_plan' => $this->serializePlan($plan),
+            'lines' => $this->serializeLines($prepared['lines'] ?? []),
             // The UI needs this early: a conversational turn must not blank the
             // results panel while the reply is still streaming.
             'turn' => [
@@ -315,6 +325,8 @@ class AiMatchingService
             ],
         ]);
 
+        $plan = $prepared['order_plan'] ?? $this->bundles->emptyPlan();
+
         $payload = [
             'session_id' => $session->id,
             'assistant_message' => $assistantMessage,
@@ -322,9 +334,11 @@ class AiMatchingService
             'understood' => $this->understood($query),
             'intent_source' => $prepared['intent_source'],
             'catalog_stats' => $stats,
-            'offers' => $this->serializeMatches($matches),
+            'offers' => $this->serializeMatches($matches, $plan),
             'suppliers' => $this->uniqueSuppliers($matches),
             'comparison' => $this->buildComparison($matches),
+            'order_plan' => $this->serializePlan($plan),
+            'lines' => $this->serializeLines($prepared['lines'] ?? []),
             'suggested_replies' => $suggestedReplies,
             'turn' => [
                 'kind' => $prepared['turn_kind'] ?? null,
@@ -490,10 +504,11 @@ class AiMatchingService
                 ->whereIn('slug', $slugs)
                 ->pluck('name')
                 ->all();
+            $multi = count($slugs) >= 2;
             $out[] = [
                 'key' => 'category',
-                'label' => 'Категория',
-                'value' => implode(', ', $names !== [] ? $names : $slugs),
+                'label' => $multi ? 'Комплект' : 'Категория',
+                'value' => implode(' + ', $names !== [] ? $names : $slugs),
                 'fields' => ['category_slugs'],
                 // Dropping the category turns the search into "anything" — allow
                 // it, but it is rarely what the buyer wants.
@@ -661,7 +676,14 @@ class AiMatchingService
         $stats['exact_count'] = count(array_filter($rows, fn ($r) => $r['tier'] === 'exact'));
         $stats['top_score'] = $rows === [] ? 0 : max(array_map(fn ($r) => $r['score'], $rows));
 
-        return ['matches' => $rows, 'stats' => $stats];
+        $fresh = $this->bundles->search($query);
+
+        return [
+            'matches' => $rows,
+            'stats' => $stats,
+            'order_plan' => $fresh['order_plan'],
+            'lines' => $fresh['lines'],
+        ];
     }
 
     private function sortablePrice(Offer $offer): float
@@ -701,11 +723,13 @@ class AiMatchingService
     }
 
     /**
-     * @param  list<array{offer: Offer, score: int, reasons: list<string>, gaps: list<string>, tier: string}>  $matches
+     * @param  list<array{offer: Offer, score: int, reasons: list<string>, gaps: list<string>, tier: string, line_slug?: string}>  $matches
+     * @param  array<string, mixed>  $plan
      * @return list<array<string, mixed>>
      */
-    private function serializeMatches(array $matches): array
+    private function serializeMatches(array $matches, array $plan = []): array
     {
+        $inBundle = $this->recommendedOfferIds($plan);
         $out = [];
         foreach ($matches as $row) {
             $resource = (new OfferResource($row['offer']))->resolve();
@@ -713,7 +737,99 @@ class AiMatchingService
             $resource['match_tier'] = $row['tier'];
             $resource['match_reasons'] = $row['reasons'];
             $resource['match_gaps'] = $row['gaps'];
+            $resource['line_slug'] = $row['line_slug'] ?? $row['offer']->category?->slug;
+            $resource['in_recommended_bundle'] = in_array((int) $row['offer']->id, $inBundle, true);
             $out[] = $resource;
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param  array<string, mixed>  $plan
+     * @return list<int>
+     */
+    private function recommendedOfferIds(array $plan): array
+    {
+        $ids = [];
+        foreach (($plan['recommended']['lines'] ?? []) as $line) {
+            $id = $line['match']['offer']->id ?? null;
+            if ($id) {
+                $ids[] = (int) $id;
+            }
+        }
+
+        return $ids;
+    }
+
+    /**
+     * @param  array<string, mixed>  $plan
+     * @return array<string, mixed>
+     */
+    private function serializePlan(array $plan): array
+    {
+        if (! ($plan['multi'] ?? false)) {
+            return ['multi' => false];
+        }
+
+        return [
+            'multi' => true,
+            'needed' => $plan['needed'] ?? 0,
+            'full_cover_count' => $plan['full_cover_count'] ?? 0,
+            'recommended' => isset($plan['recommended']) ? $this->serializeBundle($plan['recommended']) : null,
+            'bundles' => array_map(fn ($b) => $this->serializeBundle($b), $plan['bundles'] ?? []),
+            'split' => $plan['split'],
+        ];
+    }
+
+    /**
+     * @param  array<string, mixed>  $bundle
+     * @return array<string, mixed>
+     */
+    private function serializeBundle(array $bundle): array
+    {
+        $lines = [];
+        foreach ($bundle['lines'] ?? [] as $line) {
+            $match = $line['match'] ?? null;
+            $lines[] = [
+                'slug' => $line['slug'],
+                'name' => $line['name'],
+                'covered' => (bool) ($line['covered'] ?? false),
+                'offer' => $match ? $this->serializeMatches([$match], $bundle)[0] : null,
+            ];
+        }
+
+        return [
+            'kind' => $bundle['kind'],
+            'supplier_id' => $bundle['supplier_id'],
+            'supplier_name' => $bundle['supplier_name'],
+            'logo_url' => $bundle['logo_url'] ?? null,
+            'covers' => $bundle['covers'],
+            'needed' => $bundle['needed'],
+            'coverage_pct' => $bundle['coverage_pct'],
+            'min_score' => $bundle['min_score'],
+            'avg_score' => $bundle['avg_score'],
+            'weak_line' => (bool) ($bundle['weak_line'] ?? false),
+            'label' => $bundle['label'],
+            'reason' => $bundle['reason'],
+            'lines' => $lines,
+        ];
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $lines
+     * @return list<array<string, mixed>>
+     */
+    private function serializeLines(array $lines): array
+    {
+        $out = [];
+        foreach ($lines as $line) {
+            $out[] = [
+                'slug' => $line['slug'],
+                'name' => $line['name'],
+                'offer_count' => count($line['matches'] ?? []),
+                'top_score' => $line['stats']['top_score'] ?? 0,
+            ];
         }
 
         return $out;
@@ -811,6 +927,24 @@ class AiMatchingService
 
         if (count($lines) === 1) {
             $lines[] = '(параметры не уточнены — запрос был общий)';
+        }
+
+        $slugs = is_array($query['category_slugs'] ?? null) ? $query['category_slugs'] : [];
+        if (count($slugs) >= 2) {
+            $plan = $this->bundles->search($query)['order_plan'];
+            $rec = $plan['recommended'] ?? null;
+            $lines[] = '';
+            if (is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
+                $lines[] = 'Рекомендация: одна заявка — '.$rec['supplier_name']
+                    .' закрывает '.$rec['covers'].'/'.$rec['needed'].' позиций.';
+                foreach ($rec['lines'] as $line) {
+                    $title = $line['match']['offer']->offer_title ?? '—';
+                    $score = $line['match']['score'] ?? 0;
+                    $lines[] = '  • '.$line['name'].': '.$title.' ('.$score.'%)';
+                }
+            } else {
+                $lines[] = 'Комплект одним поставщиком не закрывается — заявки придётся разделить.';
+            }
         }
 
         if ($matches !== []) {

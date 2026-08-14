@@ -120,9 +120,12 @@ class AnswerComposer
         $exact = (int) ($stats['exact_count'] ?? 0);
         $relaxed = $stats['relaxed'] ?? null;
         $n = count($matches);
+        $plan = $turn['order_plan'] ?? [];
+        $rec = is_array($plan['recommended'] ?? null) ? $plan['recommended'] : null;
 
-        // Be honest about *what kind* of result this is before listing it.
-        if ($relaxed === 'all_criteria') {
+        if (($plan['multi'] ?? false) && is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
+            $parts[] = $this->bundleLead($rec, $plan);
+        } elseif ($relaxed === 'all_criteria') {
             $parts[] = 'Точного совпадения в каталоге нет. Показываю **'.$n.'** ближайших варианта — по ним видно, чего не хватает.';
         } elseif ($relaxed === 'category') {
             $parts[] = 'В запрошенной категории подходящего не нашлось, поэтому расширил поиск по всему каталогу: **'.$n.'** вариант(ов).';
@@ -241,6 +244,14 @@ class AnswerComposer
         $dropped = $turn['dropped_fields'] ?? [];
         $switched = $turn['switched_from'] ?? [];
 
+        if ($kind === TurnInterpreter::KIND_ADD_LINE) {
+            $catName = $this->categoryNames($query);
+
+            return $catName !== null
+                ? "Добавил в комплект: **{$catName}**. Ищу позиции у одного поставщика, чтобы не плодить заявки."
+                : 'Добавил позицию в комплект и ищу, кто закроет обе.';
+        }
+
         if ($kind === TurnInterpreter::KIND_TOPIC_SWITCH) {
             $catName = $this->categoryNames($query);
             $msg = $catName !== null
@@ -322,6 +333,82 @@ class AnswerComposer
         $labels = array_values(array_unique($labels));
 
         return $labels === [] ? 'уточнение' : implode(', ', $labels);
+    }
+
+    /**
+     * Lead paragraph when one supplier covers every line of the kit.
+     *
+     * @param  array<string, mixed>  $rec
+     * @param  array<string, mixed>  $plan
+     */
+    private function bundleLead(array $rec, array $plan): string
+    {
+        $needed = (int) ($rec['needed'] ?? $plan['needed'] ?? 0);
+        $name = (string) ($rec['supplier_name'] ?? 'поставщик');
+        $positions = [];
+        foreach ($rec['lines'] ?? [] as $line) {
+            $title = $line['match']['offer']->offer_title
+                ?? $line['offer']['offer_title']
+                ?? null;
+            $score = $line['match']['score'] ?? $line['offer']['match_score'] ?? null;
+            $label = $line['name'] ?? $line['slug'] ?? 'позиция';
+            $positions[] = $title
+                ? $label.': **'.$title.'**'.($score ? ' ('.$score.'%)' : '')
+                : $label;
+        }
+
+        $text = 'В каталоге **'.$name.'** закрывает весь комплект ('.$needed.' '
+            .$this->plural($needed, 'позицию', 'позиции', 'позиций')
+            .') — это одна оптовая заявка, а не несколько.';
+        if ($positions !== []) {
+            $text .= ' '.implode('; ', $positions).'.';
+        }
+        if (! empty($rec['weak_line'])) {
+            $text .= ' По одной позиции совпадение слабее — смотрите расхождения.';
+        }
+
+        return $text;
+    }
+
+    /**
+     * Compact plan for the LLM — no Offer models.
+     *
+     * @param  array<string, mixed>  $plan
+     * @return array<string, mixed>
+     */
+    private function planForLlm(array $plan): array
+    {
+        if (! ($plan['multi'] ?? false)) {
+            return ['multi' => false];
+        }
+        $rec = $plan['recommended'] ?? null;
+        $lines = [];
+        if (is_array($rec)) {
+            foreach ($rec['lines'] ?? [] as $line) {
+                $lines[] = [
+                    'name' => $line['name'] ?? null,
+                    'covered' => $line['covered'] ?? false,
+                    'title' => $line['match']['offer']->offer_title ?? null,
+                    'score' => $line['match']['score'] ?? null,
+                ];
+            }
+        }
+
+        return [
+            'multi' => true,
+            'needed' => $plan['needed'] ?? 0,
+            'full_cover_count' => $plan['full_cover_count'] ?? 0,
+            'recommended' => is_array($rec) ? [
+                'kind' => $rec['kind'] ?? null,
+                'supplier_name' => $rec['supplier_name'] ?? null,
+                'covers' => $rec['covers'] ?? 0,
+                'needed' => $rec['needed'] ?? 0,
+                'weak_line' => $rec['weak_line'] ?? false,
+                'reason' => $rec['reason'] ?? null,
+                'lines' => $lines,
+            ] : null,
+            'split' => $plan['split'] ?? null,
+        ];
     }
 
     /**
@@ -475,6 +562,11 @@ class AnswerComposer
 
         $out = [];
 
+        $rec = $turn['order_plan']['recommended'] ?? null;
+        if (is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
+            $out[] = 'Оставить обе позиции у '.$rec['supplier_name'];
+        }
+
         // Missing essentials first — these change the result the most.
         if (empty($query['length_mm']) && $isBoxes) {
             $out[] = 'Размер 400×300×200 мм';
@@ -580,6 +672,8 @@ class AnswerComposer
 - Если точных совпадений нет — скажи прямо и назови, чего не хватает (gaps).
 - Если каталог маленький (catalog_stats.is_thin) — упомяни это как ограничение выбора, но не повторяй в каждом сообщении подряд.
 - Если matches пуст, и это приветствие или вопрос о возможностях — просто поговори: ответь на вопрос и предложи описать задачу. Ничего не «находи».
+- Если order_plan.multi и recommended.kind = full_cover — это оптовый комплект. Сначала скажи, что оба типа есть у одного поставщика и это одна заявка, не пять. Назови поставщика и позиции. Не выдумывай, что он произведёт то, чего нет в matches. Если по одной линии совпадение слабое (weak_line) — скажи честно.
+- Не предлагай дробить комплект на разных поставщиков, пока один закрывает все линии. Альтернативы по отдельным позициям можно упомянуть коротко.
 
 В конце — максимум один естественный вопрос или предложение следующего шага, если он уместен. Если покупателю всё ясно, вопрос не нужен.
 RULES;
@@ -617,6 +711,7 @@ RULES;
                 ],
                 'catalog_stats' => $stats,
                 'matches' => $cards,
+                'order_plan' => $this->planForLlm($turn['order_plan'] ?? []),
                 'draft' => $template,
             ], JSON_UNESCAPED_UNICODE),
         ];

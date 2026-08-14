@@ -21,6 +21,8 @@ class TurnInterpreter
 
     public const KIND_TOPIC_SWITCH = 'topic_switch';
 
+    public const KIND_ADD_LINE = 'add_line';
+
     public const KIND_RESET = 'reset';
 
     public const KIND_SORT = 'sort';
@@ -142,30 +144,50 @@ class TurnInterpreter
             ];
         }
 
-        // ---- topic switch: a different product family ------------------------
+        // ---- add a line to the wholesale kit, or switch topic ----------------
         $newSlugs = $parser->categoriesFor($message);
         $oldSlugs = is_array($previous['category_slugs'] ?? null) ? $previous['category_slugs'] : [];
 
-        if ($newSlugs !== [] && $oldSlugs !== [] && array_intersect($newSlugs, $oldSlugs) === []) {
-            $base = $previous;
-            $switched = [];
-            foreach (self::CATEGORY_SCOPED_FIELDS as $field) {
-                if (! empty($base[$field])) {
-                    $switched[] = $field;
-                }
-                $base[$field] = null;
-            }
-            // The new category replaces the old one outright.
-            $base['category_slugs'] = $newSlugs;
+        if ($newSlugs !== [] && $oldSlugs !== []) {
+            $intersect = array_intersect($newSlugs, $oldSlugs);
+            $adding = $this->looksLikeAddLine($text) || count($newSlugs) > 1;
 
-            return [
-                'kind' => self::KIND_TOPIC_SWITCH,
-                'base_query' => $base,
-                'dropped' => [],
-                'switched_from' => $switched,
-                'should_match' => true,
-                'is_first_search' => false,
-            ];
+            if ($adding || $intersect !== []) {
+                $merged = array_values(array_unique(array_merge($oldSlugs, $newSlugs)));
+                if ($merged !== $oldSlugs) {
+                    $base = $previous;
+                    $base['category_slugs'] = $merged;
+
+                    return [
+                        'kind' => self::KIND_ADD_LINE,
+                        'base_query' => $base,
+                        'dropped' => [],
+                        'switched_from' => [],
+                        'should_match' => true,
+                        'is_first_search' => false,
+                    ];
+                }
+            } elseif ($intersect === []) {
+                $base = $previous;
+                $switched = [];
+                foreach (self::CATEGORY_SCOPED_FIELDS as $field) {
+                    if (! empty($base[$field])) {
+                        $switched[] = $field;
+                    }
+                    $base[$field] = null;
+                }
+                // The new category replaces the old one outright.
+                $base['category_slugs'] = $newSlugs;
+
+                return [
+                    'kind' => self::KIND_TOPIC_SWITCH,
+                    'base_query' => $base,
+                    'dropped' => [],
+                    'switched_from' => $switched,
+                    'should_match' => true,
+                    'is_first_search' => false,
+                ];
+            }
         }
 
         // ---- refinement of a query already in flight -------------------------
@@ -319,6 +341,15 @@ class TurnInterpreter
     {
         return (bool) preg_match(
             '/(дешевл|подешев|дороже|ниже цен|по цене|быстрее|срочн|короче срок|по сроку|сравни|сравнени|топ\s*-?\s*\d)/u',
+            $text
+        );
+    }
+
+    /** «ещё лист», «плюс стрейч», «короб и гофролист» — keep the running kit. */
+    private function looksLikeAddLine(string $text): bool
+    {
+        return (bool) preg_match(
+            '/(\bи\b|плюс|еще|ещё|также|так же|вместе|комплект|к этому|добав)/u',
             $text
         );
     }
