@@ -70,7 +70,6 @@ NEXT_PUBLIC_API_URL=https://agora.178.88.115.213.sslip.io/api
 | POST | `/api/ai/sessions/{id}/stream` | AI-подбор: то же, но SSE (результаты сразу, текст потоком) |
 | POST | `/api/ai/sessions/{id}/refine` | AI-подбор: снять требование из запроса (× на теге), без LLM |
 | GET | `/api/ai/sessions/{id}` | AI-подбор: история + текущий shortlist / `order_plan` (без LLM) |
-| POST | `/api/ai/sessions/{id}/handoff` | AI-подбор: передать менеджеру |
 | GET | `/files/{path}` | Отдача файла (лого / фото) — **не** вызывается руками, URL уже в JSON |
 
 При 2+ категориях в `/messages`, `/stream` и `GET /sessions/{id}` есть `order_plan` (сборка «один поставщик на комплект»). Подробности: [`docs/AI_MATCHING.md`](docs/AI_MATCHING.md#комплект--одна-оптовая-заявка-order_plan).
@@ -701,7 +700,6 @@ const suppliersPage = await getJson<Paginated<Supplier>>('/suppliers?per_page=50
 3. Кадры SSE: `understood` (теги) → `results` (карточки, `order_plan`) → `delta` (текст) → `done`.
 4. `×` на теге: `POST .../refine` с `remove` из `understood[].fields`.
 5. F5: `GET /api/ai/sessions/{id}` — история, офферы, `order_plan`. Без LLM.
-6. «Передать менеджеру»: `POST .../handoff`. Это запись в БД, не Telegram.
 
 `turn.searched === false` — не чистить карточки («привет»).
 

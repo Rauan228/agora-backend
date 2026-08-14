@@ -96,8 +96,6 @@ class AiSessionController extends Controller
                 'status' => $s->status,
                 'created_at' => $s->created_at?->toIso8601String(),
                 'updated_at' => $s->updated_at?->toIso8601String(),
-                'handed_off_at' => $s->handed_off_at?->toIso8601String(),
-                'handoff_contact' => $s->handoff_contact,
                 'messages_count' => (int) $s->messages_count,
                 'tokens_in' => (int) ($s->tokens_in ?? 0),
                 'tokens_out' => (int) ($s->tokens_out ?? 0),
@@ -259,24 +257,6 @@ class AiSessionController extends Controller
         $response->headers->set('X-Accel-Buffering', 'no');
 
         return $response;
-    }
-
-    public function handoff(Request $request, string $session)
-    {
-        $data = $request->validate([
-            'contact' => ['nullable', 'string', 'max:255'],
-            'note' => ['nullable', 'string', 'max:2000'],
-        ]);
-
-        $model = AiSession::findOrFail($session);
-        $result = $this->ai->handoff(
-            $model,
-            $data['contact'] ?? null,
-            $data['note'] ?? null
-        );
-        $result['session_cost'] = $this->ai->sessionCostPayload($model->fresh());
-
-        return response()->json($result);
     }
 
     private function activeSession(string $session): AiSession

@@ -62,8 +62,6 @@ class DashboardController extends Controller
                 'status' => $s->status,
                 'created_at' => $s->created_at?->toIso8601String(),
                 'updated_at' => $s->updated_at?->toIso8601String(),
-                'handed_off_at' => $s->handed_off_at?->toIso8601String(),
-                'handoff_contact' => $s->handoff_contact,
                 'messages_count' => (int) $s->messages_count,
                 'tokens_in' => (int) ($s->tokens_in ?? 0),
                 'tokens_out' => (int) ($s->tokens_out ?? 0),
@@ -216,9 +214,6 @@ class DashboardController extends Controller
             ->pluck('c', 'status')
             ->all();
 
-        $handoffs = (clone $inPeriod)->whereNotNull('handed_off_at')->count();
-        $handoffsAll = AiSession::query()->whereNotNull('handed_off_at')->count();
-
         $tokensIn = (int) (clone $inPeriod)->sum('tokens_in');
         $tokensOut = (int) (clone $inPeriod)->sum('tokens_out');
         $costUsd = (float) (clone $inPeriod)->sum('cost_usd');
@@ -254,13 +249,8 @@ class DashboardController extends Controller
                 'last_7_days' => $weekCount,
                 'by_status' => [
                     'active' => (int) ($byStatus['active'] ?? 0),
-                    'handed_off' => (int) ($byStatus['handed_off'] ?? 0),
                     'closed' => (int) ($byStatus['closed'] ?? 0),
                 ],
-            ],
-            'handoffs' => [
-                'period' => $handoffs,
-                'all_time' => $handoffsAll,
             ],
             'messages' => [
                 'period_total' => $msgTotal,

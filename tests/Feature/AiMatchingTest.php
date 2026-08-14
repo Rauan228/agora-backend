@@ -45,7 +45,6 @@ class AiMatchingTest extends TestCase
                 'suppliers',
                 'comparison',
                 'suggested_replies',
-                'cta',
             ]);
 
         $this->assertContains('corrugated-boxes', $msg->json('structured_query.category_slugs'));
@@ -53,24 +52,6 @@ class AiMatchingTest extends TestCase
         $this->assertNotEmpty($msg->json('offers'));
         $this->assertArrayHasKey('match_score', $msg->json('offers.0'));
         $this->assertArrayHasKey('match_reasons', $msg->json('offers.0'));
-    }
-
-    public function test_handoff(): void
-    {
-        $sessionId = $this->postJson('/api/ai/sessions')->json('session_id');
-        $this->postJson("/api/ai/sessions/{$sessionId}/messages", [
-            'message' => 'гофрокороб 400x300x200 Москва',
-        ])->assertOk();
-
-        $handoff = $this->postJson("/api/ai/sessions/{$sessionId}/handoff", [
-            'contact' => '+7 999 000-00-00',
-            'note' => 'Срочно',
-        ]);
-
-        $handoff->assertOk()
-            ->assertJsonPath('ok', true)
-            ->assertJsonPath('status', 'handed_off');
-        $this->assertStringContainsString('Бриф', $handoff->json('brief'));
     }
 
     public function test_catalog_endpoint_reports_search_space(): void

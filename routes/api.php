@@ -37,7 +37,6 @@ Route::prefix('ai')->group(function () {
     Route::post('/sessions/{session}/messages', [AiSessionController::class, 'message']);
     Route::post('/sessions/{session}/stream', [AiSessionController::class, 'stream']);
     Route::post('/sessions/{session}/refine', [AiSessionController::class, 'refine']);
-    Route::post('/sessions/{session}/handoff', [AiSessionController::class, 'handoff']);
 });
 
 
@@ -89,7 +88,6 @@ Route::prefix('admin')->group(function () {
             Route::post('/sessions/{session}/messages', [AdminAiSessionController::class, 'message']);
             Route::post('/sessions/{session}/stream', [AdminAiSessionController::class, 'stream']);
             Route::post('/sessions/{session}/refine', [AdminAiSessionController::class, 'refine']);
-            Route::post('/sessions/{session}/handoff', [AdminAiSessionController::class, 'handoff']);
         });
     });
 });

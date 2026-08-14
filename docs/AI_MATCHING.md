@@ -15,7 +15,6 @@ POST /api/ai/sessions/{id}/messages     — блокирующий ответ
 POST /api/ai/sessions/{id}/stream       — SSE: результаты сразу, текст потоком
 POST /api/ai/sessions/{id}/refine       — снять требование (× на теге), без LLM
 GET  /api/ai/sessions/{id}
-POST /api/ai/sessions/{id}/handoff
 ```
 
 Prefix: `{APP_URL}/api`
@@ -205,8 +204,7 @@ POST /api/ai/sessions/{session_id}/messages
   ],
   "suppliers": [],
   "comparison": { "dimensions": [], "rows": [] },
-  "suggested_replies": ["Нужна печать логотипа", "Сравни топ-3"],
-  "cta": { "type": "request_quote", "label": "Передать менеджеру", "prefill": { "brief": "..." } }
+  "suggested_replies": ["Нужна печать логотипа", "Сравни топ-3"]
 }
 ```
 
@@ -244,13 +242,6 @@ Accept: text/event-stream
 > **nginx на проде:** для локации `/api/` нужен `proxy_buffering off;`, иначе поток склеится в один пакет и стриминг не будет виден. Заголовок `X-Accel-Buffering` покрывает стандартный случай, но при нестандартном конфиге проверьте вручную.
 
 Фронт должен уметь фолбэк: если поток не открылся или упал до первого `delta` — повторить запрос на `/messages`. Так сделано в админке.
-
-```http
-POST /api/ai/sessions/{id}/handoff
-{ "contact": "+7...", "note": "Срочно" }
-```
-
-Бриф собирается из `understood` + shortlist, включая расхождения — менеджер видит и что нужно, и чего в каталоге не хватило.
 
 ---
 
@@ -318,6 +309,6 @@ php artisan test --filter=AiMatchingTest      # матчинг и честнос
 php artisan test --filter=AiConversationTest  # память диалога
 ```
 
-`AiMatchingTest`: создание сессии и матч, handoff, история, `/catalog`, keywords не обнуляют выдачу, несовпавший размер никогда не `exact`, `understood`, SSE-кадры, пересортировка сохраняет реальные score, cost-метр только в админском API.
+`AiMatchingTest`: создание сессии и матч, история, `/catalog`, keywords не обнуляют выдачу, несовпавший размер никогда не `exact`, `understood`, SSE-кадры, пересортировка сохраняет реальные score, cost-метр только в админском API.
 
 `AiConversationTest`: уточнение помнится между ходами, поздняя реплика перезаписывает раннюю, смена темы сбрасывает категорийные поля но хранит город/объём, снятие требования словами и через `/refine`, приветствие не запускает поиск, сброс очищает всё, бот не переспрашивает уже известное.

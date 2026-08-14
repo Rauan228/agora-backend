@@ -32,7 +32,6 @@ class AiMatchingService
 
     /**
      * Active chats with no messages for 24h become closed.
-     * handed_off stays in the sales queue.
      */
     public function closeStaleActive(int $hours = 24): int
     {
@@ -364,14 +363,6 @@ class AiMatchingService
                 'switched_from' => $prepared['switched_from'] ?? [],
                 'searched' => ($prepared['should_match'] ?? true) === true,
             ],
-            'cta' => [
-                'type' => 'request_quote',
-                'label' => 'Передать менеджеру',
-                'prefill' => [
-                    'session_id' => $session->id,
-                    'brief' => $this->briefText($query, $matches),
-                ],
-            ],
         ];
 
         if ($includeCost) {
@@ -544,42 +535,6 @@ class AiMatchingService
         }
 
         return $payload;
-    }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function handoff(AiSession $session, ?string $contact, ?string $note): array
-    {
-        $session->status = 'handed_off';
-        $session->handoff_contact = $contact;
-        $session->handoff_note = $note;
-        $session->handed_off_at = now();
-        $session->save();
-
-        AiMessage::create([
-            'ai_session_id' => $session->id,
-            'role' => 'system',
-            'content' => 'Handoff to manager',
-            'meta' => [
-                'contact' => $contact,
-                'note' => $note,
-                'structured_query' => $session->structured_query,
-                'offer_ids' => $session->last_match_ids,
-            ],
-        ]);
-
-        return [
-            'ok' => true,
-            'session_id' => $session->id,
-            'status' => $session->status,
-            'brief' => $this->briefText(
-                $session->structured_query ?? [],
-                $this->loadMatchesByIds($session->last_match_ids ?? [])
-            ),
-            'structured_query' => $session->structured_query,
-            'offer_ids' => $session->last_match_ids,
-        ];
     }
 
     /**
@@ -797,26 +752,6 @@ class AiMatchingService
         $lead = ((int) ($offer->production_lead_days ?? 0)) + ((int) ($offer->delivery_lead_days ?? 0));
 
         return $lead > 0 ? $lead : PHP_INT_MAX;
-    }
-
-    /**
-     * @param  list<int|string>  $ids
-     * @return list<array{offer: Offer, score: int, reasons: list<string>, gaps: list<string>, tier: string}>
-     */
-    private function loadMatchesByIds(array $ids): array
-    {
-        if ($ids === []) {
-            return [];
-        }
-        $offers = Offer::query()->whereIn('id', $ids)->with(['supplier', 'category'])->get()->keyBy('id');
-        $out = [];
-        foreach ($ids as $id) {
-            if (isset($offers[$id])) {
-                $out[] = ['offer' => $offers[$id], 'score' => 0, 'reasons' => [], 'gaps' => [], 'tier' => 'unknown'];
-            }
-        }
-
-        return $out;
     }
 
     /**
@@ -1038,59 +973,5 @@ class AiMatchingService
         }
 
         return null;
-    }
-
-    /**
-     * @param  array<string, mixed>  $query
-     * @param  list<array{offer: Offer, score: int, reasons: list<string>, gaps: list<string>, tier: string}>  $matches
-     */
-    private function briefText(array $query, array $matches): string
-    {
-        $lines = ['Бриф AI-подбора Agora'];
-
-        foreach ($this->understood($query) as $item) {
-            $lines[] = $item['label'].': '.$item['value'];
-        }
-
-        if (count($lines) === 1) {
-            $lines[] = '(параметры не уточнены — запрос был общий)';
-        }
-
-        $slugs = is_array($query['category_slugs'] ?? null) ? $query['category_slugs'] : [];
-        if (count($slugs) >= 2) {
-            $plan = $this->bundles->search($query)['order_plan'];
-            $rec = $plan['recommended'] ?? null;
-            $lines[] = '';
-            if (is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
-                $lines[] = 'Рекомендация: одна заявка — '.$rec['supplier_name']
-                    .' закрывает '.$rec['covers'].'/'.$rec['needed'].' позиций.';
-                foreach ($rec['lines'] as $line) {
-                    $title = $line['match']['offer']->offer_title ?? '—';
-                    $score = $line['match']['score'] ?? 0;
-                    $lines[] = '  • '.$line['name'].': '.$title.' ('.$score.'%)';
-                }
-            } else {
-                $lines[] = 'Комплект одним поставщиком не закрывается — заявки придётся разделить.';
-            }
-        }
-
-        if ($matches !== []) {
-            $lines[] = '';
-            $lines[] = 'Shortlist:';
-            foreach (array_slice($matches, 0, 5) as $i => $row) {
-                $o = $row['offer'];
-                $score = $row['score'] > 0 ? ' — '.$row['score'].'%' : '';
-                $lines[] = ($i + 1).'. #'.$o->id.' '.$o->offer_title
-                    .' / '.($o->supplier?->commercial_name ?? '—').$score;
-                if (! empty($row['gaps'])) {
-                    $lines[] = '   расхождения: '.implode('; ', array_slice($row['gaps'], 0, 3));
-                }
-            }
-        } else {
-            $lines[] = '';
-            $lines[] = 'Shortlist пуст — в каталоге нет подходящих офферов, нужен поиск поставщика.';
-        }
-
-        return implode("\n", $lines);
     }
 }

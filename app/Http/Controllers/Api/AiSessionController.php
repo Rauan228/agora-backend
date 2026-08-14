@@ -216,25 +216,6 @@ class AiSessionController extends Controller
         return $response;
     }
 
-    public function handoff(Request $request, string $session)
-    {
-        $this->throttle($request, 'ai-session-handoff:'.$session, 10);
-
-        $data = $request->validate([
-            'contact' => ['nullable', 'string', 'max:255'],
-            'note' => ['nullable', 'string', 'max:2000'],
-        ]);
-
-        $model = AiSession::findOrFail($session);
-        $result = $this->ai->handoff(
-            $model,
-            $data['contact'] ?? null,
-            $data['note'] ?? null
-        );
-
-        return response()->json($result);
-    }
-
     private function activeSession(string $session): AiSession
     {
         $model = AiSession::findOrFail($session);

@@ -20,9 +20,6 @@ class AiSession extends Model
         'structured_query',
         'last_match_ids',
         'status',
-        'handoff_contact',
-        'handoff_note',
-        'handed_off_at',
         'tokens_in',
         'tokens_out',
         'cost_usd',
@@ -35,7 +32,6 @@ class AiSession extends Model
         return [
             'structured_query' => 'array',
             'last_match_ids' => 'array',
-            'handed_off_at' => 'datetime',
             'cost_summary' => 'array',
             'cost_usd' => 'float',
         ];
