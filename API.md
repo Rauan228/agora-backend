@@ -69,11 +69,11 @@ NEXT_PUBLIC_API_URL=https://agora.178.88.115.213.sslip.io/api
 | POST | `/api/ai/sessions/{id}/messages` | AI-подбор: сообщение → shortlist офферов |
 | POST | `/api/ai/sessions/{id}/stream` | AI-подбор: то же, но SSE (результаты сразу, текст потоком) |
 | POST | `/api/ai/sessions/{id}/refine` | AI-подбор: снять требование из запроса (× на теге), без LLM |
-| GET | `/api/ai/sessions/{id}` | AI-подбор: история сессии |
+| GET | `/api/ai/sessions/{id}` | AI-подбор: история + текущий shortlist / `order_plan` (без LLM) |
 | POST | `/api/ai/sessions/{id}/handoff` | AI-подбор: передать менеджеру |
-
-При 2+ категориях в ответе есть `order_plan` (сборка «один поставщик на комплект»). Подробности: [`docs/AI_MATCHING.md`](docs/AI_MATCHING.md#комплект--одна-оптовая-заявка-order_plan).
 | GET | `/files/{path}` | Отдача файла (лого / фото) — **не** вызывается руками, URL уже в JSON |
+
+При 2+ категориях в `/messages`, `/stream` и `GET /sessions/{id}` есть `order_plan` (сборка «один поставщик на комплект»). Подробности: [`docs/AI_MATCHING.md`](docs/AI_MATCHING.md#комплект--одна-оптовая-заявка-order_plan).
 
 Полное описание AI: [`docs/AI_MATCHING.md`](docs/AI_MATCHING.md).
 
@@ -690,7 +690,36 @@ const suppliersPage = await getJson<Paginated<Supplier>>('/suppliers?per_page=50
 
 ---
 
-## 8. Ошибки
+## 8. Чат на витрине (AI)
+
+Бэкенд уже содержит весь мозг. Фронт только рисует. Auth нет. Cost/токены **не приходят** и не надо рисовать.
+
+### Минимальный поток
+
+1. `POST /api/ai/sessions` → сохранить `session_id` в `localStorage` (или `?s=`).
+2. Сообщение: `POST /api/ai/sessions/{id}/stream` (`Accept: text/event-stream`). Если поток не открылся до первого `delta` — `POST .../messages`.
+3. Кадры SSE: `understood` (теги) → `results` (карточки, `order_plan`) → `delta` (текст) → `done`.
+4. `×` на теге: `POST .../refine` с `remove` из `understood[].fields`.
+5. F5: `GET /api/ai/sessions/{id}` — история, офферы, `order_plan`. Без LLM.
+6. «Передать менеджеру»: `POST .../handoff`. Это запись в БД, не Telegram.
+
+`turn.searched === false` — не чистить карточки («привет»).
+
+### Комплект (`order_plan`)
+
+Если покупатель просит две категории (`короб и лист`):
+
+- `order_plan.multi === true`
+- `order_plan.recommended.kind === "full_cover"` — один поставщик закрывает все линии. Показать блок «одна заявка», не мешать короб и лист в одной таблице.
+- Иначе — позиции придётся разнести.
+
+Не считать % на клиенте. Не выдумывать поставщиков.
+
+Полный контракт: [`docs/AI_MATCHING.md`](docs/AI_MATCHING.md).
+
+---
+
+## 9. Ошибки
 
 | HTTP | Когда | Что делать на UI |
 |---|---|---|
@@ -712,7 +741,7 @@ const suppliersPage = await getJson<Paginated<Supplier>>('/suppliers?per_page=50
 
 ---
 
-## 9. CORS / домены
+## 10. CORS / домены
 
 Разрешены:
 
@@ -726,7 +755,7 @@ const suppliersPage = await getJson<Paginated<Supplier>>('/suppliers?per_page=50
 
 ---
 
-## 10. Что API **не** делает (пока)
+## 11. Что API **не** делает (пока)
 
 - ❌ регистрация / login покупателя  
 - ❌ корзина / заказ / оплата  
@@ -738,7 +767,7 @@ const suppliersPage = await getJson<Paginated<Supplier>>('/suppliers?per_page=50
 
 ---
 
-## 11. Быстрый smoke-test
+## 12. Быстрый smoke-test
 
 ```bash
 curl -sS "https://agora.178.88.115.213.sslip.io/api/categories" | head
@@ -749,7 +778,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" "https://agora.178.88.115.213.sslip.io
 
 ---
 
-## 12. Контакты / репозитории
+## 13. Контакты / репозитории
 
 | | |
 |---|---|

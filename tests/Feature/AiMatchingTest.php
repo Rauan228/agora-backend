@@ -198,6 +198,31 @@ class AiMatchingTest extends TestCase
         $show = $this->getJson("/api/ai/sessions/{$sessionId}");
         $show->assertOk();
         $this->assertGreaterThanOrEqual(2, count($show->json('messages')));
+        $this->assertNotEmpty($show->json('offers'));
+        $this->assertArrayHasKey('order_plan', $show->json());
+        $this->assertArrayNotHasKey('cost', $show->json());
+        $this->assertArrayNotHasKey('session_cost', $show->json());
+        foreach ($show->json('messages') as $m) {
+            $this->assertArrayNotHasKey('cost', $m);
+            if (is_array($m['meta'] ?? null)) {
+                $this->assertArrayNotHasKey('cost', $m['meta']);
+            }
+        }
+    }
+
+    public function test_get_session_restores_kit_plan(): void
+    {
+        $sessionId = $this->postJson('/api/ai/sessions')->json('session_id');
+        $this->postJson("/api/ai/sessions/{$sessionId}/messages", [
+            'message' => 'мне нужен гофрокороб и гофролист, Москва',
+        ])->assertOk();
+
+        $show = $this->getJson("/api/ai/sessions/{$sessionId}");
+        $show->assertOk();
+        $this->assertTrue($show->json('order_plan.multi'));
+        $this->assertSame('ПаллетПром', $show->json('order_plan.recommended.supplier_name'));
+        $this->assertNotEmpty($show->json('offers'));
+        $this->assertSame('restore', $show->json('turn.kind'));
     }
 
     public function test_public_message_has_no_cost_fields(): void

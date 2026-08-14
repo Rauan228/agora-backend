@@ -59,22 +59,9 @@ class AiSessionController extends Controller
 
     public function show(string $session)
     {
-        $model = AiSession::with('messages')->findOrFail($session);
+        $model = AiSession::findOrFail($session);
 
-        return response()->json([
-            'session_id' => $model->id,
-            'status' => $model->status,
-            'structured_query' => $model->structured_query,
-            'understood' => $this->ai->understood($model->structured_query ?? []),
-            'last_match_ids' => $model->last_match_ids,
-            'messages' => $model->messages->map(fn ($m) => [
-                'id' => $m->id,
-                'role' => $m->role,
-                'content' => $m->content,
-                'meta' => $m->meta,
-                'created_at' => $m->created_at?->toIso8601String(),
-            ]),
-        ]);
+        return response()->json($this->ai->presentSession($model, includeCost: false));
     }
 
     public function message(Request $request, string $session)

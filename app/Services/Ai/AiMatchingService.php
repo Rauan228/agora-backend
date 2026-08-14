@@ -450,6 +450,86 @@ class AiMatchingService
     }
 
     /**
+     * Rebuild the last shortlist + kit plan so the buyer can reopen the chat.
+     * SQL only — no LLM. Public payload never includes cost.
+     *
+     * @return array<string, mixed>
+     */
+    public function presentSession(AiSession $session, bool $includeCost = false): array
+    {
+        $query = $this->intentParser->normalize(
+            $session->structured_query ?? $this->intentParser->emptyQuery()
+        );
+        $has = $this->interpreter->hasAnyConstraint($query);
+
+        if ($has) {
+            $result = $this->bundles->search($query);
+            $matches = $result['matches'];
+            $plan = $result['order_plan'];
+            $stats = $result['stats'];
+            $lines = $result['lines'];
+        } else {
+            $matches = [];
+            $plan = $this->bundles->emptyPlan();
+            $stats = $this->matcher->emptyStats();
+            $lines = [];
+        }
+
+        $messages = $session->messages()->orderBy('id')->get()->map(function (AiMessage $m) use ($includeCost) {
+            $meta = is_array($m->meta) ? $m->meta : null;
+            if (! $includeCost && is_array($meta)) {
+                unset($meta['cost']);
+            }
+
+            $row = [
+                'id' => $m->id,
+                'role' => $m->role,
+                'content' => $m->content,
+                'meta' => $meta,
+                'created_at' => $m->created_at?->toIso8601String(),
+            ];
+            if ($includeCost) {
+                $row['cost'] = is_array($m->meta) ? ($m->meta['cost'] ?? null) : null;
+            }
+
+            return $row;
+        })->all();
+
+        $payload = [
+            'session_id' => $session->id,
+            'status' => $session->status,
+            'structured_query' => $query,
+            'understood' => $this->understood($query),
+            'last_match_ids' => $session->last_match_ids,
+            'catalog' => $this->catalogSnapshot(),
+            'catalog_stats' => $stats,
+            'offers' => $this->serializeMatches($matches, $plan),
+            'suppliers' => $this->uniqueSuppliers($matches),
+            'comparison' => $this->buildComparison($matches),
+            'order_plan' => $this->serializePlan($plan),
+            'lines' => $this->serializeLines($lines),
+            'messages' => $messages,
+            'suggested_replies' => $this->composer->repliesFor($query, $matches, [
+                'should_match' => $has,
+                'order_plan' => $plan,
+            ]),
+            'turn' => [
+                'kind' => 'restore',
+                'added_fields' => [],
+                'dropped_fields' => [],
+                'switched_from' => [],
+                'searched' => $has,
+            ],
+        ];
+
+        if ($includeCost) {
+            $payload['session_cost'] = $this->sessionCostPayload($session);
+        }
+
+        return $payload;
+    }
+
+    /**
      * @return array<string, mixed>
      */
     public function handoff(AiSession $session, ?string $contact, ?string $note): array
