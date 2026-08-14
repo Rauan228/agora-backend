@@ -881,6 +881,7 @@ class AiMatchingService
         return [
             'rfq_count' => $pack['rfq_count'] ?? 0,
             'kind' => $pack['kind'] ?? null,
+            'saves_rfqs' => (bool) ($pack['saves_rfqs'] ?? false),
             'all_solid' => (bool) ($pack['all_solid'] ?? false),
             'label' => $pack['label'] ?? null,
             'reason' => $pack['reason'] ?? null,

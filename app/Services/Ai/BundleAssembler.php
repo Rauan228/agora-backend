@@ -516,21 +516,29 @@ class BundleAssembler
         }
 
         $k = count($groups);
+        $neededN = count($neededSlugs);
         $allSolid = (bool) $best['solid'];
-        $label = $k === 1 ? 'Одна заявка' : $k.' заявки вместо '.count($neededSlugs);
+        // «2 заявки вместо 2» is noise — only shout when we actually cut tickets.
+        $saves = $k >= 2 && $k < $neededN;
 
         if ($k === 1) {
+            $label = 'Одна заявка';
             $reason = $allSolid
                 ? $groups[0]['supplier_name'].' закрывает весь комплект одной оптовой заявкой.'
                 : $groups[0]['supplier_name'].' закрывает все линии, но по одной совпадение слабое.';
-        } else {
-            $reason = 'Одним заводом все '.count($neededSlugs).' позиций сильно не закрыть. Собираю в '.$k
+        } elseif ($saves) {
+            $label = $k.' заявки вместо '.$neededN;
+            $reason = 'Одним заводом все '.$neededN.' позиций сильно не закрыть. Собираю в '.$k
                 .' заявки: '.implode('; ', $bits).'.';
+        } else {
+            $label = implode(' · ', array_map(fn ($g) => $g['supplier_name'], $groups));
+            $reason = 'В каталоге нет одного завода на все позиции: '.implode('; ', $bits).'.';
         }
 
         return [
             'rfq_count' => $k,
-            'kind' => $k === 1 ? 'full_cover' : 'split_cover',
+            'kind' => $k === 1 ? 'full_cover' : ($saves ? 'split_cover' : 'split_plain'),
+            'saves_rfqs' => $saves,
             'all_solid' => $allSolid,
             'label' => $label,
             'reason' => $reason,

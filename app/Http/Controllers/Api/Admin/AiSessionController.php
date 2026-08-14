@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\Admin;
 
 use App\Http\Controllers\Controller;
+use App\Models\AiMessage;
 use App\Models\AiSession;
 use App\Models\Offer;
 use App\Models\Supplier;
@@ -57,6 +58,62 @@ class AiSessionController extends Controller
         return response()->json($this->catalogStats() + [
             'cost_rates' => LlmCost::rates() + [
                 'usd_to_rub' => (float) config('services.wavespeed.usd_to_rub', 90),
+            ],
+        ]);
+    }
+
+    /** All AI chats — for reading / analysis. Not the storefront. */
+    public function index(Request $request)
+    {
+        $perPage = max(5, min((int) $request->integer('per_page', 30), 100));
+
+        $q = AiSession::query()
+            ->withCount('messages')
+            ->orderByDesc('updated_at');
+
+        if ($request->filled('status')) {
+            $q->where('status', $request->string('status'));
+        }
+
+        $page = $q->paginate($perPage);
+        $ids = collect($page->items())->pluck('id');
+        $lastUser = AiMessage::query()
+            ->whereIn('ai_session_id', $ids)
+            ->where('role', 'user')
+            ->orderByDesc('id')
+            ->get()
+            ->unique('ai_session_id')
+            ->keyBy('ai_session_id');
+
+        $rows = collect($page->items())->map(function (AiSession $s) use ($lastUser) {
+            $usd = (float) ($s->cost_usd ?? 0);
+            $last = $lastUser->get($s->id);
+
+            return [
+                'id' => $s->id,
+                'status' => $s->status,
+                'created_at' => $s->created_at?->toIso8601String(),
+                'updated_at' => $s->updated_at?->toIso8601String(),
+                'handed_off_at' => $s->handed_off_at?->toIso8601String(),
+                'handoff_contact' => $s->handoff_contact,
+                'messages_count' => (int) $s->messages_count,
+                'tokens_in' => (int) ($s->tokens_in ?? 0),
+                'tokens_out' => (int) ($s->tokens_out ?? 0),
+                'llm_calls' => (int) ($s->llm_calls ?? 0),
+                'cost_usd' => round($usd, 6),
+                'cost_rub' => round($usd * (float) config('services.wavespeed.usd_to_rub', 90), 2),
+                'last_user_message' => $last ? mb_substr((string) $last->content, 0, 180) : null,
+                'query_preview' => $this->queryPreview($s->structured_query ?? []),
+            ];
+        })->all();
+
+        return response()->json([
+            'data' => $rows,
+            'meta' => [
+                'current_page' => $page->currentPage(),
+                'last_page' => $page->lastPage(),
+                'per_page' => $page->perPage(),
+                'total' => $page->total(),
             ],
         ]);
     }
@@ -228,6 +285,29 @@ class AiSessionController extends Controller
         }
 
         return $model;
+    }
+
+    /**
+     * @param  array<string, mixed>  $q
+     */
+    private function queryPreview(array $q): string
+    {
+        $bits = [];
+        $slugs = $q['category_slugs'] ?? [];
+        if (is_array($slugs) && $slugs !== []) {
+            $bits[] = implode(', ', $slugs);
+        }
+        if (! empty($q['length_mm'])) {
+            $bits[] = $q['length_mm'].'×'.($q['width_mm'] ?? '?').'×'.($q['height_mm'] ?? '?');
+        }
+        if (! empty($q['city'])) {
+            $bits[] = (string) $q['city'];
+        }
+        if (! empty($q['qty'])) {
+            $bits[] = $q['qty'].' шт';
+        }
+
+        return $bits !== [] ? implode(' · ', $bits) : '—';
     }
 
     /**

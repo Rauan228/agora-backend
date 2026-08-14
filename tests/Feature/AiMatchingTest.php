@@ -305,4 +305,19 @@ class AiMatchingTest extends TestCase
         $this->assertFalse($res->json('order_plan.multi'));
         $this->assertNull($res->json('order_plan.recommended'));
     }
+
+    public function test_two_lines_two_suppliers_is_not_sold_as_savings(): void
+    {
+        $sessionId = $this->postJson('/api/ai/sessions')->json('session_id');
+        $res = $this->postJson("/api/ai/sessions/{$sessionId}/messages", [
+            'message' => 'гофрокороб 600x400x300 и стрейч, Москва, 8000 шт',
+        ])->assertOk();
+
+        $this->assertTrue($res->json('order_plan.multi'));
+        $pack = $res->json('order_plan.pack');
+        if (is_array($pack) && (int) ($pack['rfq_count'] ?? 0) >= 2) {
+            $this->assertFalse($pack['saves_rfqs']);
+            $this->assertStringNotContainsString('вместо 2', (string) ($pack['label'] ?? ''));
+        }
+    }
 }

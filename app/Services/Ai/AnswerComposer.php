@@ -124,7 +124,7 @@ class AnswerComposer
         $rec = is_array($plan['recommended'] ?? null) ? $plan['recommended'] : null;
 
         $pack = is_array($plan['pack'] ?? null) ? $plan['pack'] : null;
-        if (($plan['multi'] ?? false) && is_array($pack) && (int) ($pack['rfq_count'] ?? 0) >= 2) {
+        if (($plan['multi'] ?? false) && is_array($pack) && ! empty($pack['saves_rfqs'])) {
             $parts[] = $this->packLead($pack);
         } elseif (($plan['multi'] ?? false) && is_array($rec) && ($rec['kind'] ?? '') === 'full_cover') {
             $parts[] = $this->bundleLead($rec, $plan);
@@ -503,6 +503,7 @@ class AnswerComposer
         return [
             'rfq_count' => $pack['rfq_count'] ?? 0,
             'kind' => $pack['kind'] ?? null,
+            'saves_rfqs' => $pack['saves_rfqs'] ?? false,
             'all_solid' => $pack['all_solid'] ?? false,
             'label' => $pack['label'] ?? null,
             'reason' => $pack['reason'] ?? null,
@@ -663,7 +664,7 @@ class AnswerComposer
 
         $rec = $turn['order_plan']['recommended'] ?? null;
         $pack = $turn['order_plan']['pack'] ?? null;
-        if (is_array($pack) && (int) ($pack['rfq_count'] ?? 0) >= 2) {
+        if (is_array($pack) && ! empty($pack['saves_rfqs'])) {
             $names = [];
             foreach ($pack['groups'] ?? [] as $g) {
                 if (! empty($g['supplier_name'])) {
@@ -783,7 +784,7 @@ class AnswerComposer
 - Если каталог маленький (catalog_stats.is_thin) — упомяни это как ограничение выбора, но не повторяй в каждом сообщении подряд.
 - Если matches пуст, и это приветствие или вопрос о возможностях — просто поговори: ответь на вопрос и предложи описать задачу. Ничего не «находи».
 - Если order_plan.multi и recommended.kind = full_cover — это оптовый комплект. Сначала скажи, что оба типа есть у одного поставщика и это одна заявка, не пять. Назови поставщика и позиции. Не выдумывай, что он произведёт то, чего нет в matches. Если по одной линии совпадение слабое (weak_line) — скажи честно.
-- order_plan.recommended.lines — правда, когда rfq = 1. Если order_plan.pack.rfq_count >= 2 — правда это pack.groups: каждая группа = одна заявка одному заводу. Не говори «придётся 4 заявки», если pack собрал 2. Не выдумывай заводы вне groups.
+- order_plan.recommended.lines — правда, когда одна заявка. pack.saves_rfqs=true — тогда pack.groups это экономия заявок (2 вместо 4). Если saves_rfqs=false и два поставщика на две позиции — не пиши «2 заявки вместо 2», просто назови кто что закрывает.
 - order_plan.recommended.lines — ЕДИНСТВЕННАЯ правда о комплекте при одной заявке. Не пиши, что убрал категорию, если она есть в lines.
 - Не предлагай дробить комплект на разных поставщиков, пока один закрывает все линии. Альтернативы по отдельным позициям можно упомянуть коротко.
 - Если turn_context.kind = restate_kit — покупатель назвал новый набор позиций. Не путай с «ещё».

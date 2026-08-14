@@ -83,6 +83,7 @@ Route::prefix('admin')->group(function () {
         // AI matching + cost meter (admin only — not for public storefront)
         Route::prefix('ai')->group(function () {
             Route::get('/catalog', [AdminAiSessionController::class, 'catalog']);
+            Route::get('/sessions', [AdminAiSessionController::class, 'index']);
             Route::post('/sessions', [AdminAiSessionController::class, 'store']);
             Route::get('/sessions/{session}', [AdminAiSessionController::class, 'show']);
             Route::post('/sessions/{session}/messages', [AdminAiSessionController::class, 'message']);

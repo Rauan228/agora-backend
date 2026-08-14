@@ -40,4 +40,25 @@ class AdminDashboardTest extends TestCase
         $token = $user->createToken('t')->plainTextToken;
         $this->withToken($token)->getJson('/api/admin/ai/ledger')->assertOk()->assertJsonStructure(['data', 'meta']);
     }
+
+    public function test_admin_can_list_and_read_sessions(): void
+    {
+        $this->seed([CategorySeeder::class, SupplierSeeder::class, OfferSeeder::class]);
+        $user = User::factory()->create();
+        $token = $user->createToken('t')->plainTextToken;
+
+        $sessionId = $this->postJson('/api/ai/sessions')->json('session_id');
+        $this->postJson("/api/ai/sessions/{$sessionId}/messages", [
+            'message' => 'гофрокороб Москва',
+        ])->assertOk();
+
+        $list = $this->withToken($token)->getJson('/api/admin/ai/sessions');
+        $list->assertOk()->assertJsonStructure(['data', 'meta']);
+        $this->assertTrue(collect($list->json('data'))->contains('id', $sessionId));
+
+        $read = $this->withToken($token)->getJson("/api/admin/ai/sessions/{$sessionId}");
+        $read->assertOk();
+        $this->assertGreaterThanOrEqual(2, count($read->json('messages')));
+        $this->assertArrayHasKey('session_cost', $read->json());
+    }
 }
